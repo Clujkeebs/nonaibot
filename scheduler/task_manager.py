@@ -138,6 +138,25 @@ class TaskManager:
             coalesce=True,
         )
 
+        # ── Active position management (pyramid / scale-out, every 30 min) ───
+        self._scheduler.add_job(
+            self._safe(e.manage_open_positions),
+            IntervalTrigger(minutes=30, timezone=ET),
+            id="manage_positions",
+            name="Position Management",
+            max_instances=1,
+            coalesce=True,
+        )
+
+        # ── Weekly theme rebalance (Sunday 01:00 ET, after sector rotation) ──
+        self._scheduler.add_job(
+            self._safe(e.theme_rebalance),
+            CronTrigger(day_of_week="sun", hour=1, minute=0, timezone=ET),
+            id="theme_rebalance",
+            name="Theme Rebalance",
+            max_instances=1,
+        )
+
         self._scheduler.start()
         log.info(
             "TaskManager started — {} jobs scheduled",

@@ -109,6 +109,16 @@ class OrderEngine:
             log.error("close_all_positions failed: {}", e)
             alert_error(str(e), "close_all_positions")
 
+    def close_partial(
+        self,
+        symbol: str,
+        qty: float,
+        price: float = 0.0,
+        is_crypto: bool = False,
+    ) -> bool:
+        """Sell a specific qty to partially exit a position."""
+        return self._execute(symbol, "sell", qty, "partial_close", price, is_crypto)
+
     def cancel_all_orders(self) -> None:
         try:
             self._client.cancel_orders()
