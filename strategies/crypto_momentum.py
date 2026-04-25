@@ -38,14 +38,14 @@ class CryptoMomentum(BaseStrategy):
     name = "crypto_momentum"
     timeframe_days = 60   # hourly bars, so ~60 days = ~1440 bars
 
-    RSI_ENTRY  = 55.0
-    RSI_EXIT   = 45.0
+    RSI_ENTRY  = 50.0
+    RSI_EXIT   = 42.0
     SMA_PERIOD = 50
     MACD_FAST  = 12
     MACD_SLOW  = 26
     MACD_SIG   = 9
     ATR_PERIOD = 14
-    MIN_24H_RET = 0.01   # 1% minimum 24h return
+    MIN_24H_RET = 0.003  # 0.3% minimum 24h return
 
     # Weekend boost for BTC/ETH
     WEEKEND_SYMBOLS = {"BTC/USD", "ETH/USD"}
@@ -89,8 +89,6 @@ class CryptoMomentum(BaseStrategy):
             return None
         if cur_hist <= 0:
             return None
-        if prev_hist >= cur_hist:
-            return None   # histogram must be accelerating
 
         # 24h return (24 hourly bars)
         if len(close) >= 24:
@@ -98,9 +96,9 @@ class CryptoMomentum(BaseStrategy):
             if ret_24h < self.MIN_24H_RET:
                 return None
 
-        # Micro breakout: above prior 4-bar high
-        if len(close) >= 5:
-            prior_high = close.iloc[-5:-1].max()
+        # Micro breakout: above prior 2-bar high
+        if len(close) >= 3:
+            prior_high = close.iloc[-3:-1].max()
             if cur_close <= prior_high:
                 return None
 

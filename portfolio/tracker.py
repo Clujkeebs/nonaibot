@@ -22,6 +22,10 @@ from utils.logger import log
 
 ET = pytz.timezone(config.TIMEZONE)
 
+# Alpaca positions API returns "BTCUSD"; data API uses "BTC/USD".
+# Normalize on the way out so the rest of the codebase sees slash format.
+_CRYPTO_SLASH: dict = {s.replace("/", ""): s for s in config.CRYPTO_SYMBOLS}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS portfolio_snapshots (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,7 +94,8 @@ class PortfolioTracker:
             positions: list[Position] = self._client.get_all_positions()
             result = {}
             for p in positions:
-                result[p.symbol] = {
+                sym = _CRYPTO_SLASH.get(p.symbol, p.symbol)
+                result[sym] = {
                     "qty":           float(p.qty),
                     "avg_price":     float(p.avg_entry_price),
                     "market_value":  float(p.market_value or 0),
