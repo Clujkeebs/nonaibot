@@ -86,6 +86,7 @@ class TradingEngine:
 
         # Optional AI layer
         self._ai_ranker = None
+        self._ai_regime = None
         if config.ENABLE_AI_LAYER:
             self._init_ai()
 
@@ -228,12 +229,12 @@ class TradingEngine:
 
     def update_regime(self) -> None:
         try:
-            bars = self._data.get_stock_bars(["SPY"], TimeFrame.Day, lookback_days=250)
+            bars = self._data.get_stock_bars(["SPY"], TimeFrame.Day, lookback_days=400)
             spy  = bars.get("SPY")
             self._regime.update(spy)
 
-            if config.ENABLE_AI_LAYER and self._ai_ranker:
-                state = self._ai_ranker.predict(spy) if spy is not None else None
+            if config.ENABLE_AI_LAYER and self._ai_regime:
+                state = self._ai_regime.predict(spy) if spy is not None else None
                 if state is not None:
                     log.info("AI regime state: {}", state)
         except Exception as e:
@@ -536,4 +537,21 @@ class TradingEngine:
             else:
                 log.info("AI: scikit-learn not installed — ranker disabled")
         except Exception as e:
-            log.warning("AI init error: {}", e)
+            log.warning("AI ranker init error: {}", e)
+
+        try:
+            from ai.regime_detector import LocalRegimeDetector
+            detector = LocalRegimeDetector()
+            if detector.is_available():
+                if not detector.load():
+                    log.info("AI: training HMM regime detector on startup...")
+                    spy_bars = self._data.get_stock_bars(["SPY"], TimeFrame.Day, 600)
+                    spy = spy_bars.get("SPY")
+                    if spy is not None:
+                        detector.fit(spy)
+                self._ai_regime = detector
+                log.info("AI regime detector active")
+            else:
+                log.info("AI: hmmlearn not installed — regime detector disabled")
+        except Exception as e:
+            log.warning("AI regime detector init error: {}", e)
