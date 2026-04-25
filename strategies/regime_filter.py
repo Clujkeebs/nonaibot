@@ -1,0 +1,116 @@
+"""
+Regime Filter — adjusts strategy weights based on detected market regime.
+
+No VIX API needed. We derive a volatility proxy from SPY daily bars:
+  - realized_vol = std of 20-day daily returns × sqrt(252)
+  - trend_state  = SPY close vs SMA(200)
+
+Regime matrix:
+  BULL_LOW_VOL   → all strategies at full weight
+  BULL_HIGH_VOL  → reduce trend-following weight, increase mean-reversion
+  BEAR_LOW_VOL   → only mean-reversion and sector rotation
+  BEAR_HIGH_VOL  → all equity strategies halted; crypto-only, reduced size
+  UNKNOWN        → conservative (0.7× weights)
+
+The regime is recomputed every hour and cached.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, Optional
+
+import pandas as pd
+
+from strategies.base import BaseStrategy
+from utils.logger import log
+
+
+class Regime(str, Enum):
+    BULL_LOW_VOL  = "bull_low_vol"
+    BULL_HIGH_VOL = "bull_high_vol"
+    BEAR_LOW_VOL  = "bear_low_vol"
+    BEAR_HIGH_VOL = "bear_high_vol"
+    UNKNOWN       = "unknown"
+
+
+@dataclass
+class RegimeWeights:
+    trend_following:     float = 1.0
+    mean_reversion:      float = 1.0
+    volatility_breakout: float = 1.0
+    sector_rotation:     float = 1.0
+    crypto_momentum:     float = 1.0
+    max_position_scale:  float = 1.0   # multiply MAX_POSITION_PCT by this
+
+
+_REGIME_TABLE: Dict[Regime, RegimeWeights] = {
+    Regime.BULL_LOW_VOL:  RegimeWeights(1.0,  0.6,  1.0,  1.0,  1.0,  1.0),
+    Regime.BULL_HIGH_VOL: RegimeWeights(0.6,  1.2,  1.2,  0.8,  0.8,  0.8),
+    Regime.BEAR_LOW_VOL:  RegimeWeights(0.0,  1.2,  0.4,  1.0,  0.6,  0.7),
+    Regime.BEAR_HIGH_VOL: RegimeWeights(0.0,  0.5,  0.0,  0.5,  0.5,  0.5),
+    Regime.UNKNOWN:       RegimeWeights(0.7,  0.7,  0.7,  0.7,  0.7,  0.7),
+}
+
+VOL_HIGH_THRESHOLD = 0.22   # 22% annualised vol → "high vol"
+VOL_LOW_THRESHOLD  = 0.12
+
+
+class RegimeFilter:
+    """Detect market regime; expose weight multipliers to the engine."""
+
+    def __init__(self) -> None:
+        self._regime: Regime = Regime.UNKNOWN
+        self._weights: RegimeWeights = _REGIME_TABLE[Regime.UNKNOWN]
+        self._realized_vol: float = 0.0
+
+    @property
+    def regime(self) -> Regime:
+        return self._regime
+
+    @property
+    def weights(self) -> RegimeWeights:
+        return self._weights
+
+    def update(self, spy_bars: Optional[pd.DataFrame]) -> None:
+        if spy_bars is None or len(spy_bars) < 210:
+            log.warning("RegimeFilter: insufficient SPY bars — using UNKNOWN regime")
+            self._regime  = Regime.UNKNOWN
+            self._weights = _REGIME_TABLE[Regime.UNKNOWN]
+            return
+
+        close  = spy_bars["close"]
+        sma200 = close.rolling(200).mean()
+        daily_ret = close.pct_change()
+        realized_vol = daily_ret.iloc[-20:].std() * (252 ** 0.5)
+
+        self._realized_vol = float(realized_vol)
+        is_bull  = float(close.iloc[-1]) > float(sma200.iloc[-1])
+        is_high_vol = realized_vol > VOL_HIGH_THRESHOLD
+
+        if is_bull and not is_high_vol:
+            self._regime = Regime.BULL_LOW_VOL
+        elif is_bull and is_high_vol:
+            self._regime = Regime.BULL_HIGH_VOL
+        elif not is_bull and not is_high_vol:
+            self._regime = Regime.BEAR_LOW_VOL
+        else:
+            self._regime = Regime.BEAR_HIGH_VOL
+
+        self._weights = _REGIME_TABLE[self._regime]
+        log.info(
+            "Regime updated → {} | SPY={:.2f} SMA200={:.2f} Vol={:.1%}",
+            self._regime,
+            float(close.iloc[-1]),
+            float(sma200.iloc[-1]),
+            realized_vol,
+        )
+
+    def strategy_weight(self, strategy_name: str) -> float:
+        return getattr(self._weights, strategy_name, 1.0)
+
+    def equity_trading_enabled(self) -> bool:
+        return self._regime not in (Regime.BEAR_HIGH_VOL,)
+
+    def max_position_scale(self) -> float:
+        return self._weights.max_position_scale
