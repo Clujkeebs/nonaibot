@@ -472,7 +472,7 @@ class TradingEngine:
                 self._portfolio.daily_pnl(),
             )
             if not approved:
-                log.debug("Signal REJECTED ({}) — {}: {}", sym, sig.strategy, reason)
+                log.info("Signal REJECTED ({}) — {}: {}", sym, sig.strategy, reason)
                 continue
 
             success = self._exec.buy(

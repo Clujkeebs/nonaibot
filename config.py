@@ -37,7 +37,7 @@ DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% dail
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.07")  # 7% weekly halt
 MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "25")
 MIN_ATR_PCT: float          = _float("MIN_ATR_PCT",          "0.005")  # skip illiquid symbols
-PORTFOLIO_HEAT_MAX: float   = _float("PORTFOLIO_HEAT_MAX",   "0.20")   # max total risk-on
+PORTFOLIO_HEAT_MAX: float   = _float("PORTFOLIO_HEAT_MAX",   "0.80")   # max total risk-on
 
 # ── Strategy toggles ─────────────────────────────────────────────────────────
 ENABLE_TREND_FOLLOWING:     bool = _bool("ENABLE_TREND_FOLLOWING",     "true")
@@ -97,7 +97,7 @@ SLIPPAGE_LIMIT_PCT: float    = _float("SLIPPAGE_LIMIT_PCT","0.003") # 0.3%
 MIN_NOTIONAL: float          = _float("MIN_NOTIONAL",      "100")   # $100 min order
 
 # ── Data ─────────────────────────────────────────────────────────────────────
-BARS_LOOKBACK_DAYS: int      = _int("BARS_LOOKBACK_DAYS", "120")  # history for indicators
+BARS_LOOKBACK_DAYS: int      = _int("BARS_LOOKBACK_DAYS", "350")  # needs 210+ trading days for SMA200
 CRYPTO_BARS_LOOKBACK: int    = _int("CRYPTO_BARS_LOOKBACK","90")
 
 # ── Infrastructure ───────────────────────────────────────────────────────────

@@ -73,8 +73,8 @@ class TrendFollowing(BaseStrategy):
 
         # Fresh crossover: fast was below slow, now above
         fresh_cross = (prev_fast <= prev_slow) and (cur_fast > cur_slow)
-        # Continuation: fast already above slow with strong ADX
-        continuation = (cur_fast > cur_slow) and (cur_adx > self.ADX_MIN + 5)
+        # Continuation: fast already above slow — ADX just needs to exceed minimum
+        continuation = (cur_fast > cur_slow) and (cur_adx > self.ADX_MIN)
 
         above_trend = cur_price > cur_trend
         adx_strong  = cur_adx > self.ADX_MIN
