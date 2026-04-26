@@ -109,9 +109,8 @@ class CryptoMomentum(BaseStrategy):
             stop_price=stop,
             is_crypto=True,
             metadata={
-                "rsi":      round(cur_rsi, 2),
-                "sma50":    round(cur_sma50, 4),
-                "macd_hist": round(float(cur_hist), 6),
+                "rsi":   round(cur_rsi, 2),
+                "sma20": round(cur_sma20, 4),
             },
         )
 
