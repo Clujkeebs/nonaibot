@@ -120,28 +120,19 @@ class RiskManager:
         open_positions: Dict[str, dict],
     ) -> Tuple[bool, str, float]:
         """
-        Crypto uses a flat dollar-per-trade model — no ATR sizing complexity.
-        Target: 1% of portfolio per trade, minimum $200, maximum $2000.
-        Only two caps apply: total crypto allocation and buying power.
+        Crypto flat-dollar sizing. No per-crypto allocation cap —
+        the overall portfolio heat limit (80%) is the only ceiling.
+        Target: 1% of portfolio per trade, $200 min, $2000 max.
         """
         target = max(200.0, min(portfolio_value * 0.01, 2000.0))
 
-        crypto_exp = sum(
-            p.get("market_value", 0)
-            for s, p in open_positions.items()
-            if _universe.is_crypto(s)
-        )
-        log.info("Crypto check {}: target=${:.0f} crypto_exp={:.1%} cap={:.1%}",
-                 signal.symbol, target,
-                 crypto_exp / portfolio_value,
-                 config.MAX_CRYPTO_PCT)
-
-        if (crypto_exp + target) / portfolio_value > config.MAX_CRYPTO_PCT:
-            log.warning("REJECT {}: crypto allocation {:.1%} would exceed {:.1%}",
+        total_exp = sum(p.get("market_value", 0) for p in open_positions.values())
+        if (total_exp + target) / portfolio_value > config.PORTFOLIO_HEAT_MAX:
+            log.warning("REJECT {}: portfolio heat {:.1%} would exceed {:.1%}",
                         signal.symbol,
-                        (crypto_exp + target) / portfolio_value,
-                        config.MAX_CRYPTO_PCT)
-            return False, "crypto allocation limit", 0.0
+                        (total_exp + target) / portfolio_value,
+                        config.PORTFOLIO_HEAT_MAX)
+            return False, "portfolio heat limit", 0.0
 
         if target > buying_power * 0.95:
             log.warning("REJECT {}: buying power {:.2f} < target {:.2f}",
@@ -154,9 +145,9 @@ class RiskManager:
             return False, "qty <= 0", 0.0
 
         notional = qty * signal.price
-        log.info("APPROVED crypto {} qty={} notional={:.2f} new_crypto_pct={:.1%}",
+        log.info("APPROVED crypto {} qty={} notional={:.2f} heat={:.1%}",
                  signal.symbol, qty, notional,
-                 (crypto_exp + notional) / portfolio_value)
+                 (total_exp + notional) / portfolio_value)
         return True, "approved", qty
 
     def close_qty(self, position: dict) -> float:

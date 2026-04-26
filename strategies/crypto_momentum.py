@@ -117,6 +117,8 @@ class CryptoMomentum(BaseStrategy):
             },
         )
 
+    PROFIT_TAKE_PCT = 0.06   # close when up 6%
+
     def check_exit(
         self,
         symbol: str,
@@ -133,11 +135,21 @@ class CryptoMomentum(BaseStrategy):
             atr   = self._atr(bars, self.ATR_PERIOD)
             cur   = float(close.iloc[-1])
 
+            # Profit-take: up 6% from entry
+            if entry_price > 0 and cur >= entry_price * (1 + self.PROFIT_TAKE_PCT):
+                log.info("{} EXIT — profit-take {:.1%}", symbol, (cur / entry_price) - 1)
+                return True
+            # Momentum fading
             if float(rsi.iloc[-1]) < self.RSI_EXIT:
+                log.info("{} EXIT — RSI {:.1f} < {}", symbol, float(rsi.iloc[-1]), self.RSI_EXIT)
                 return True
+            # Trend broken
             if cur < float(sma20.iloc[-1]):
+                log.info("{} EXIT — price below SMA20", symbol)
                 return True
+            # Hard stop
             if cur < entry_price - config.ATR_STOP_MULT * float(atr.iloc[-1]):
+                log.info("{} EXIT — stop loss hit", symbol)
                 return True
         except Exception as e:
             log.warning("CryptoMomentum.check_exit({}) error: {}", symbol, e)
