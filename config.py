@@ -75,7 +75,7 @@ CRYPTO_SYMBOLS: List[str] = [
     "AVAX/USD", "DOT/USD", "LINK/USD",
     "DOGE/USD", "AAVE/USD", "UNI/USD",
     "LTC/USD", "XRP/USD", "ADA/USD",
-    "ATOM/USD", "MATIC/USD",
+    "SHIB/USD", "BCH/USD",
 ]
 
 # All equity symbols (deduped)
