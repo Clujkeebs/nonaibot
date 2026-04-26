@@ -142,7 +142,9 @@ class TradingEngine:
             timeframe=TimeFrame.Hour,
             lookback_days=config.CRYPTO_BARS_LOOKBACK,
         )
+        log.info("Crypto bars received for {} symbols: {}", len(bars), list(bars.keys()))
         if not bars:
+            log.warning("No crypto bars returned — skipping")
             return
 
         all_signals: List[Signal] = []

@@ -38,14 +38,10 @@ class CryptoMomentum(BaseStrategy):
     name = "crypto_momentum"
     timeframe_days = 60   # hourly bars, so ~60 days = ~1440 bars
 
-    RSI_ENTRY  = 50.0
-    RSI_EXIT   = 42.0
-    SMA_PERIOD = 50
-    MACD_FAST  = 12
-    MACD_SLOW  = 26
-    MACD_SIG   = 9
+    RSI_ENTRY  = 45.0
+    RSI_EXIT   = 40.0
+    SMA_PERIOD = 20
     ATR_PERIOD = 14
-    MIN_24H_RET = 0.003  # 0.3% minimum 24h return
 
     # Weekend boost for BTC/ETH
     WEEKEND_SYMBOLS = {"BTC/USD", "ETH/USD"}
@@ -53,10 +49,13 @@ class CryptoMomentum(BaseStrategy):
 
     def generate_signals(self, bars: Dict[str, pd.DataFrame]) -> List[Signal]:
         signals: List[Signal] = []
+        log.info("CryptoMomentum scanning {} symbols", len(bars))
         for sym, df in bars.items():
             if not _universe.is_crypto(sym):
+                log.info("{} not recognised as crypto — skipping", sym)
                 continue
-            if not self._enough_bars(df, minimum=self.SMA_PERIOD + 30):
+            if not self._enough_bars(df, minimum=self.SMA_PERIOD + 5):
+                log.info("{} insufficient bars ({})", sym, len(df))
                 continue
             try:
                 sig = self._evaluate(sym, df)
@@ -64,45 +63,34 @@ class CryptoMomentum(BaseStrategy):
                     signals.append(sig)
             except Exception as e:
                 log.warning("CryptoMomentum._evaluate({}) error: {}", sym, e)
-        log.debug("CryptoMomentum generated {} signals", len(signals))
+        log.info("CryptoMomentum generated {} signals from {} symbols", len(signals), len(bars))
         return signals
 
     def _evaluate(self, sym: str, df: pd.DataFrame) -> Signal | None:
         close = df["close"]
 
-        rsi    = self._rsi(close, self.RSI_ENTRY)
-        sma50  = self._sma(close, self.SMA_PERIOD)
-        macd_line, macd_signal = self._macd(close)
-        macd_hist = macd_line - macd_signal
-        atr    = self._atr(df, self.ATR_PERIOD)
+        rsi   = self._rsi(close, 14)
+        sma20 = self._sma(close, 20)
+        atr   = self._atr(df, self.ATR_PERIOD)
 
-        cur_close   = close.iloc[-1]
-        cur_rsi     = rsi.iloc[-1]
-        cur_sma50   = sma50.iloc[-1]
-        cur_hist    = macd_hist.iloc[-1]
-        prev_hist   = macd_hist.iloc[-2]
-        cur_atr     = atr.iloc[-1]
+        cur_close = float(close.iloc[-1])
+        cur_rsi   = float(rsi.iloc[-1])
+        cur_sma20 = float(sma20.iloc[-1])
+        cur_atr   = float(atr.iloc[-1])
+
+        log.info("{} | RSI={:.1f} SMA20={:.4f} price={:.4f}",
+                 sym, cur_rsi, cur_sma20, cur_close)
 
         if cur_rsi < self.RSI_ENTRY:
+            log.info("{} SKIP — RSI {:.1f} < {}", sym, cur_rsi, self.RSI_ENTRY)
             return None
-        if cur_close < cur_sma50:
+        if cur_close < cur_sma20:
+            log.info("{} SKIP — price below SMA20")
             return None
-        if cur_hist <= 0:
+        if cur_atr <= 0:
             return None
 
-        # 24h return (24 hourly bars)
-        if len(close) >= 24:
-            ret_24h = close.iloc[-1] / close.iloc[-24] - 1
-            if ret_24h < self.MIN_24H_RET:
-                return None
-
-        # Micro breakout: above prior 2-bar high
-        if len(close) >= 3:
-            prior_high = close.iloc[-3:-1].max()
-            if cur_close <= prior_high:
-                return None
-
-        strength = min(1.0, 0.5 + (cur_rsi - self.RSI_ENTRY) / 50)
+        strength = min(1.0, 0.5 + (cur_rsi - self.RSI_ENTRY) / 50.0)
 
         # Weekend / overnight bonus
         now = datetime.now(ET)
@@ -134,32 +122,21 @@ class CryptoMomentum(BaseStrategy):
         bars: pd.DataFrame,
         position_side: str = "long",
     ) -> bool:
-        if not self._enough_bars(bars, minimum=30):
+        if not self._enough_bars(bars, minimum=25):
             return False
         try:
-            close     = bars["close"]
-            rsi       = self._rsi(close, self.RSI_ENTRY)
-            sma50     = self._sma(close, self.SMA_PERIOD)
-            macd_line, macd_signal = self._macd(close)
-            macd_hist = macd_line - macd_signal
-            atr       = self._atr(bars, self.ATR_PERIOD)
-            cur       = close.iloc[-1]
+            close = bars["close"]
+            rsi   = self._rsi(close, 14)
+            sma20 = self._sma(close, self.SMA_PERIOD)
+            atr   = self._atr(bars, self.ATR_PERIOD)
+            cur   = float(close.iloc[-1])
 
-            if rsi.iloc[-1] < self.RSI_EXIT:
+            if float(rsi.iloc[-1]) < self.RSI_EXIT:
                 return True
-            if cur < sma50.iloc[-1]:
+            if cur < float(sma20.iloc[-1]):
                 return True
-            if macd_hist.iloc[-1] < 0 and macd_hist.iloc[-2] < 0:
-                return True
-            if cur < entry_price - config.ATR_STOP_MULT * atr.iloc[-1]:
+            if cur < entry_price - config.ATR_STOP_MULT * float(atr.iloc[-1]):
                 return True
         except Exception as e:
             log.warning("CryptoMomentum.check_exit({}) error: {}", symbol, e)
         return False
-
-    def _macd(self, series: pd.Series):
-        fast = self._ema(series, self.MACD_FAST)
-        slow = self._ema(series, self.MACD_SLOW)
-        line = fast - slow
-        signal = self._ema(line, self.MACD_SIG)
-        return line, signal
