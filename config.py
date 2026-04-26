@@ -30,7 +30,7 @@ ALPACA_PAPER: bool = _bool("ALPACA_PAPER", "true")
 # ── Risk ─────────────────────────────────────────────────────────────────────
 MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.05")   # 5% per symbol
 MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.25")   # 25% per sector
-MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "0.30")   # 30% total crypto
+MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
 RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.01")   # 1% risk per trade
 ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "2.0")    # 2× ATR stop
 DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% daily halt

@@ -82,10 +82,13 @@ class CryptoMomentum(BaseStrategy):
                  sym, cur_rsi, cur_sma20, cur_close)
 
         if cur_rsi < self.RSI_ENTRY:
-            log.info("{} SKIP — RSI {:.1f} < {}", sym, cur_rsi, self.RSI_ENTRY)
+            log.info("{} SKIP — RSI {:.1f} < {:.0f} (not enough momentum)", sym, cur_rsi, self.RSI_ENTRY)
+            return None
+        if cur_rsi > 72:
+            log.info("{} SKIP — RSI {:.1f} > 72 (overbought)", sym, cur_rsi)
             return None
         if cur_close < cur_sma20:
-            log.info("{} SKIP — price below SMA20")
+            log.info("{} SKIP — price {:.4f} below SMA20 {:.4f}", sym, cur_close, cur_sma20)
             return None
         if cur_atr <= 0:
             return None

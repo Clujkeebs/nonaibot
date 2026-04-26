@@ -83,6 +83,7 @@ class TradingEngine:
 
         # Map symbol → strategy name for exit tracking
         self._position_strategy: Dict[str, str] = {}
+        self._seed_position_strategies()
 
         # Optional AI layer
         self._ai_ranker = None
@@ -502,6 +503,23 @@ class TradingEngine:
         if now.weekday() >= 5:
             return False
         return dtime(9, 35) <= now.time() <= dtime(15, 55)
+
+    def _seed_position_strategies(self) -> None:
+        """
+        On startup, assign a default strategy to any existing position that
+        isn't already tracked. Without this, pre-existing or cross-restart
+        positions are invisible to check_all_exits and never get stop-loss
+        or momentum-exit checks applied.
+        """
+        try:
+            positions = self._portfolio.get_open_positions()
+            for sym in positions:
+                if sym not in self._position_strategy:
+                    default = "crypto_momentum" if self._universe.is_crypto(sym) else "trend_following"
+                    self._position_strategy[sym] = default
+                    log.info("Seeded exit tracking: {} → {}", sym, default)
+        except Exception as e:
+            log.warning("_seed_position_strategies error: {}", e)
 
     def _atr_from_df(self, df) -> float:
         """14-period ATR from an OHLCV dataframe."""
