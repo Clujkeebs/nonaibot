@@ -210,6 +210,11 @@ class TradingEngine:
                     log.info("Exit signal for {} from {}", sym, strat_name)
                     self._exec.close_position(sym)
                     self._position_strategy.pop(sym, None)
+                    # Freed a slot — scan immediately for a replacement
+                    if is_crypto:
+                        self.run_crypto_strategies()
+                    elif self._is_market_hours():
+                        self.run_equity_strategies()
             except Exception as e:
                 log.error("check_all_exits({}) error: {}", sym, e)
 

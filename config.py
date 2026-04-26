@@ -73,6 +73,9 @@ CORE_MACRO: List[str] = ["SPY", "IWM", "GLD", "TLT", "DIA"]
 CRYPTO_SYMBOLS: List[str] = [
     "BTC/USD", "ETH/USD", "SOL/USD",
     "AVAX/USD", "DOT/USD", "LINK/USD",
+    "DOGE/USD", "AAVE/USD", "UNI/USD",
+    "LTC/USD", "XRP/USD", "ADA/USD",
+    "ATOM/USD", "MATIC/USD",
 ]
 
 # All equity symbols (deduped)

@@ -56,7 +56,7 @@ class TaskManager:
         # ── Equity strategies (market hours only, enforced inside job) ───────
         self._scheduler.add_job(
             self._safe(e.run_equity_strategies),
-            IntervalTrigger(minutes=5, timezone=ET),
+            IntervalTrigger(minutes=3, timezone=ET),
             id="equity_strategies",
             name="Equity Strategies",
             max_instances=1,
@@ -66,7 +66,7 @@ class TaskManager:
         # ── Crypto strategies (24/7) ──────────────────────────────────────────
         self._scheduler.add_job(
             self._safe(e.run_crypto_strategies),
-            IntervalTrigger(minutes=15, timezone=ET),
+            IntervalTrigger(minutes=5, timezone=ET),
             id="crypto_strategies",
             name="Crypto Strategies",
             max_instances=1,

@@ -31,7 +31,7 @@ class MeanReversion(BaseStrategy):
     BB_PERIOD   = 20
     BB_STD      = 2.0
     RSI_PERIOD  = 14
-    RSI_ENTRY   = 35.0
+    RSI_ENTRY   = 40.0
     ADX_MAX     = 30.0
     TREND_SMA   = 200
     ATR_PERIOD  = 14
@@ -78,11 +78,6 @@ class MeanReversion(BaseStrategy):
         if cur_adx > self.ADX_MAX:
             return None  # in a real downtrend — skip
         if cur_atr <= 0:
-            return None
-
-        # Extra quality filter: RSI two bars ago was not also oversold
-        # (we want fresh oversold, not falling-knife stuck)
-        if len(rsi) >= 3 and rsi.iloc[-3] < self.RSI_ENTRY:
             return None
 
         # Strength inversely proportional to how far below lower BB
