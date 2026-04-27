@@ -28,14 +28,14 @@ ALPACA_SECRET_KEY: str = os.environ["ALPACA_SECRET_KEY"]
 ALPACA_PAPER: bool = _bool("ALPACA_PAPER", "true")
 
 # ── Risk ─────────────────────────────────────────────────────────────────────
-MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.05")   # 5% per symbol
+MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.10")   # 10% per symbol
 MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.25")   # 25% per sector
 MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
-RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.01")   # 1% risk per trade
-ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "2.0")    # 2× ATR stop
+RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.02")   # 2% risk per trade
+ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "1.5")    # 1.5× ATR stop
 DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% daily halt
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.07")  # 7% weekly halt
-MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "25")
+MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "40")
 MIN_ATR_PCT: float          = _float("MIN_ATR_PCT",          "0.005")  # skip illiquid symbols
 PORTFOLIO_HEAT_MAX: float   = _float("PORTFOLIO_HEAT_MAX",   "0.80")   # max total risk-on
 
@@ -101,7 +101,7 @@ MIN_NOTIONAL: float          = _float("MIN_NOTIONAL",      "100")   # $100 min o
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 BARS_LOOKBACK_DAYS: int      = _int("BARS_LOOKBACK_DAYS", "350")  # needs 210+ trading days for SMA200
-CRYPTO_BARS_LOOKBACK: int    = _int("CRYPTO_BARS_LOOKBACK","90")
+CRYPTO_BARS_LOOKBACK: int    = _int("CRYPTO_BARS_LOOKBACK","30")  # 15-min bars, 30 days = ~384 bars
 
 # ── Infrastructure ───────────────────────────────────────────────────────────
 DB_PATH: str          = os.getenv("DB_PATH",    "trading_bot.db")

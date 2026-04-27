@@ -122,9 +122,9 @@ class RiskManager:
         """
         Crypto flat-dollar sizing. No per-crypto allocation cap —
         the overall portfolio heat limit (80%) is the only ceiling.
-        Target: 1% of portfolio per trade, $200 min, $2000 max.
+        Target: 2.5% of portfolio per trade, $200 min, $5000 max.
         """
-        target = max(200.0, min(portfolio_value * 0.01, 2000.0))
+        target = max(200.0, min(portfolio_value * 0.025, 5000.0))
 
         total_exp = sum(p.get("market_value", 0) for p in open_positions.values())
         if (total_exp + target) / portfolio_value > config.PORTFOLIO_HEAT_MAX:

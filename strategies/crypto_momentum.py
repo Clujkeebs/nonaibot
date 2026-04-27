@@ -1,7 +1,7 @@
 """
 Strategy 5 — 24/7 Crypto Momentum
 
-Trades on hourly bars — operates around the clock.
+Trades on 15-minute bars — operates around the clock.
 
 Entry:  RSI(14) > 55
         AND close > SMA(50)
@@ -36,7 +36,7 @@ _universe = Universe()
 
 class CryptoMomentum(BaseStrategy):
     name = "crypto_momentum"
-    timeframe_days = 60   # hourly bars, so ~60 days = ~1440 bars
+    timeframe_days = 30   # 15-min bars, so ~30 days = ~384 bars
 
     RSI_ENTRY  = 45.0
     RSI_EXIT   = 40.0
@@ -117,7 +117,7 @@ class CryptoMomentum(BaseStrategy):
             },
         )
 
-    PROFIT_TAKE_PCT = 0.06   # close when up 6%
+    PROFIT_TAKE_PCT = 0.08   # close when up 8%
 
     def check_exit(
         self,

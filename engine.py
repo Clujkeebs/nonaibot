@@ -10,12 +10,13 @@ Flow per equity cycle (every 5 min, market hours):
   6. Check circuit breakers
   7. For each signal: RiskManager.check_signal() → OrderEngine.buy/sell
 
-Flow per crypto cycle (every 15 min, 24/7):
-  Same but using hourly bars and crypto symbols only.
+Flow per crypto cycle (every 5 min, 24/7):
+  Same but using 15-minute bars and crypto symbols only.
 
 Exit checks (every 2 min):
   For every open position, ask its originating strategy check_exit().
-  If exit → OrderEngine.close_position().
+  If exit → OrderEngine.close_partial() with full qty (with retries & fill verify).
+  Uses 15-minute bars for crypto, daily bars for equity.
 
 Circuit breaker check (every 1 min):
   Pull daily/weekly P&L from PortfolioTracker.
@@ -140,7 +141,7 @@ class TradingEngine:
         log.info("Running crypto strategies...")
         bars = self._data.get_crypto_bars(
             self._universe.crypto,
-            timeframe=TimeFrame.Hour,
+            timeframe=TimeFrame.Minute15,
             lookback_days=config.CRYPTO_BARS_LOOKBACK,
         )
         log.info("Crypto bars received for {} symbols: {}", len(bars), list(bars.keys()))
@@ -199,7 +200,7 @@ class TradingEngine:
             try:
                 # Fetch recent bars
                 if is_crypto:
-                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=10)
+                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Minute15, lookback_days=10)
                 else:
                     bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=10)
 
@@ -209,7 +210,9 @@ class TradingEngine:
 
                 if strat.check_exit(sym, pos["avg_price"], df):
                     log.info("Exit signal for {} from {}", sym, strat_name)
-                    self._exec.close_position(sym)
+                    qty = pos.get("qty", 0)
+                    cur_price = float(df["close"].iloc[-1]) if len(df) > 0 else pos["avg_price"]
+                    self._exec.close_partial(sym, abs(qty), cur_price, is_crypto)
                     self._position_strategy.pop(sym, None)
                     # Freed a slot — scan immediately for a replacement
                     if is_crypto:
@@ -293,7 +296,7 @@ class TradingEngine:
 
             try:
                 if is_crypto:
-                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=20)
+                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Minute15, lookback_days=20)
                 else:
                     bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=20)
 
@@ -416,7 +419,7 @@ class TradingEngine:
 
                     if close_pct >= 0.90:
                         log.info("Rebalance: close {} ({} overweight {:.1%})", sym, theme, overweight)
-                        self._exec.close_position(sym)
+                        self._exec.close_partial(sym, pos["qty"], pos["avg_price"], is_crypto)
                         self._position_strategy.pop(sym, None)
                     else:
                         close_qty = pos["qty"] * close_pct
@@ -467,7 +470,9 @@ class TradingEngine:
             if sig.side == "sell":
                 # Sell signal (e.g. sector rotation exit) — only act if we hold it
                 if sym in positions:
-                    self._exec.close_position(sym)
+                    pos = positions[sym]
+                    is_crypto = self._universe.is_crypto(sym)
+                    self._exec.close_partial(sym, pos["qty"], sig.price, is_crypto)
                     self._position_strategy.pop(sym, None)
                 continue
 
