@@ -46,14 +46,14 @@ class RegimeWeights:
 
 _REGIME_TABLE: Dict[Regime, RegimeWeights] = {
     Regime.BULL_LOW_VOL:  RegimeWeights(1.0,  0.6,  1.0,  1.0,  1.0,  1.0),
-    Regime.BULL_HIGH_VOL: RegimeWeights(0.6,  1.2,  1.2,  0.8,  0.8,  0.8),
-    Regime.BEAR_LOW_VOL:  RegimeWeights(0.0,  1.2,  0.4,  1.0,  0.6,  0.7),
-    Regime.BEAR_HIGH_VOL: RegimeWeights(0.0,  0.5,  0.0,  0.5,  0.5,  0.5),
-    Regime.UNKNOWN:       RegimeWeights(0.7,  0.7,  0.7,  0.7,  0.7,  0.7),
+    Regime.BULL_HIGH_VOL: RegimeWeights(0.7,  1.2,  1.2,  0.8,  1.0,  0.9),
+    Regime.BEAR_LOW_VOL:  RegimeWeights(0.5,  1.2,  0.6,  1.0,  0.8,  0.8),
+    Regime.BEAR_HIGH_VOL: RegimeWeights(0.4,  0.8,  0.4,  0.6,  0.8,  0.7),
+    Regime.UNKNOWN:       RegimeWeights(0.8,  0.8,  0.8,  0.8,  0.9,  0.9),
 }
 
-VOL_HIGH_THRESHOLD = 0.22   # 22% annualised vol → "high vol"
-VOL_LOW_THRESHOLD  = 0.12
+VOL_HIGH_THRESHOLD = 0.35   # 35% annualised vol → "high vol"
+VOL_LOW_THRESHOLD  = 0.18
 
 
 class RegimeFilter:
@@ -110,7 +110,7 @@ class RegimeFilter:
         return getattr(self._weights, strategy_name, 1.0)
 
     def equity_trading_enabled(self) -> bool:
-        return self._regime not in (Regime.BEAR_HIGH_VOL,)
+        return True  # weights reduce size in bad regimes; never hard-block
 
     def max_position_scale(self) -> float:
         return self._weights.max_position_scale

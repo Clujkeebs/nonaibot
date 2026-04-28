@@ -92,6 +92,9 @@ class TradingEngine:
         if config.ENABLE_AI_LAYER:
             self._init_ai()
 
+        # Update regime immediately so we don't start in UNKNOWN for an hour
+        self.update_regime()
+
         log.info(
             "TradingEngine ready — {} equity strategies, {} crypto strategies",
             len(self._equity_strategies), len(self._crypto_strategies),
