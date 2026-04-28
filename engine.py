@@ -144,7 +144,7 @@ class TradingEngine:
         log.info("Running crypto strategies...")
         bars = self._data.get_crypto_bars(
             self._universe.crypto,
-            timeframe=TimeFrame.Minute15,
+            timeframe=TimeFrame.Hour,
             lookback_days=config.CRYPTO_BARS_LOOKBACK,
         )
         log.info("Crypto bars received for {} symbols: {}", len(bars), list(bars.keys()))
@@ -203,7 +203,7 @@ class TradingEngine:
             try:
                 # Fetch recent bars
                 if is_crypto:
-                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Minute15, lookback_days=10)
+                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=10)
                 else:
                     bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=10)
 
@@ -299,7 +299,7 @@ class TradingEngine:
 
             try:
                 if is_crypto:
-                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Minute15, lookback_days=20)
+                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=20)
                 else:
                     bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=20)
 
