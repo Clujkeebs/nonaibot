@@ -37,7 +37,7 @@ DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% dail
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.07")  # 7% weekly halt
 MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "40")
 MIN_ATR_PCT: float          = _float("MIN_ATR_PCT",          "0.005")  # skip illiquid symbols
-PORTFOLIO_HEAT_MAX: float   = _float("PORTFOLIO_HEAT_MAX",   "0.80")   # max total risk-on
+PORTFOLIO_HEAT_MAX: float   = max(0.50, _float("PORTFOLIO_HEAT_MAX",   "0.80"))  # max total risk-on (floor 0.50)
 
 # ── Strategy toggles ─────────────────────────────────────────────────────────
 ENABLE_TREND_FOLLOWING:     bool = _bool("ENABLE_TREND_FOLLOWING",     "true")

@@ -203,9 +203,9 @@ class TradingEngine:
             try:
                 # Fetch recent bars
                 if is_crypto:
-                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=10)
+                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=30)
                 else:
-                    bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=10)
+                    bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=40)
 
                 df = bars_dict.get(sym)
                 if df is None:
@@ -299,9 +299,9 @@ class TradingEngine:
 
             try:
                 if is_crypto:
-                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=20)
+                    bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=30)
                 else:
-                    bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=20)
+                    bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=40)
 
                 df = bars_dict.get(sym)
                 if df is None or len(df) < 10:
