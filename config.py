@@ -48,10 +48,11 @@ ENABLE_SECTOR_ROTATION:     bool = _bool("ENABLE_SECTOR_ROTATION",     "true")
 ENABLE_CRYPTO_MOMENTUM:     bool = _bool("ENABLE_CRYPTO_MOMENTUM",     "true")
 ENABLE_AI_LAYER:            bool = _bool("ENABLE_AI_LAYER",            "false")
 
-# ── Thematic universe (20 equity symbols) ────────────────────────────────────
+# ── Thematic universe (23 equity symbols) ────────────────────────────────────
 AI_TECH: List[str] = [
     "NVDA", "MSFT", "AAPL", "META", "AMZN", "GOOGL",
     "TSLA", "AVGO", "AMD",  "PLTR", "CRWD",
+    "MU",   "ALGN",                          # sleeper picks: AI memory + medtech dip
 ]
 
 GROWTH_ETFS: List[str] = [
