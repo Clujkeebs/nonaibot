@@ -33,6 +33,8 @@ MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.25")   # 25% per
 MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
 RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.02")   # 2% risk per trade
 HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.03")   # 3% hard stop any position
+TRAIL_ARM_PCT: float        = _float("TRAIL_ARM_PCT",        "0.05")   # arm trail after +5% from entry
+TRAIL_GIVEBACK_PCT: float   = _float("TRAIL_GIVEBACK_PCT",   "0.025")  # give back 2.5% from peak
 ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "1.5")    # 1.5× ATR stop
 DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% daily halt
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.07")  # 7% weekly halt
@@ -48,7 +50,7 @@ ENABLE_SECTOR_ROTATION:     bool = _bool("ENABLE_SECTOR_ROTATION",     "true")
 ENABLE_CRYPTO_MOMENTUM:     bool = _bool("ENABLE_CRYPTO_MOMENTUM",     "true")
 ENABLE_AI_LAYER:            bool = _bool("ENABLE_AI_LAYER",            "false")
 
-# ── Thematic universe (23 equity symbols) ────────────────────────────────────
+# ── Thematic universe (23 equity symbols, focused & high-quality) ───────────
 AI_TECH: List[str] = [
     "NVDA", "MSFT", "AAPL", "META", "AMZN", "GOOGL",
     "TSLA", "AVGO", "AMD",  "PLTR", "CRWD",
@@ -65,9 +67,6 @@ CRYPTO_EQUITIES: List[str] = [
 
 CORE_MACRO: List[str] = ["GLD", "TLT"]
 
-# Legacy aliases (unused but kept for SECTOR_MAP compat)
-CLEAN_ENERGY: List[str] = []
-
 CRYPTO_SYMBOLS: List[str] = [
     "BTC/USD", "ETH/USD", "SOL/USD",
     "AVAX/USD", "DOT/USD", "LINK/USD",
@@ -76,7 +75,7 @@ CRYPTO_SYMBOLS: List[str] = [
     "SHIB/USD", "BCH/USD",
 ]
 
-# All equity symbols (deduped) — exactly 20
+# All equity symbols (deduped) — 23 high-conviction names
 ALL_EQUITY_SYMBOLS: List[str] = sorted(set(
     AI_TECH + GROWTH_ETFS + CRYPTO_EQUITIES + CORE_MACRO
 ))

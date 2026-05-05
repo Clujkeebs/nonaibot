@@ -154,5 +154,38 @@ class SectorRotation(BaseStrategy):
         bars: pd.DataFrame,
         position_side: str = "long",
     ) -> bool:
-        # Exits are handled by the weekly rotation signals above
+        """
+        Sector-rotation exits between weekly rebalances:
+          - profit-take at +8% from entry
+          - close if price loses 20-day SMA (theme breaking down)
+          - hard ATR stop (2× ATR below entry)
+        Hard 3% stop in engine.check_all_exits is a separate floor.
+        """
+        if not self._enough_bars(bars, minimum=25):
+            return False
+        try:
+            close = bars["close"]
+            sma20 = self._sma(close, 20)
+            atr   = self._atr(bars, 14)
+            cur   = float(close.iloc[-1])
+
+            # Profit-take at +8%
+            if entry_price > 0 and cur >= entry_price * 1.08:
+                log.info("{} sector_rotation EXIT — profit-take {:.1%}",
+                         symbol, (cur / entry_price) - 1)
+                return True
+
+            # Trend break: price below 20-day SMA = theme losing momentum
+            if not pd.isna(sma20.iloc[-1]) and cur < float(sma20.iloc[-1]):
+                log.info("{} sector_rotation EXIT — price below SMA20", symbol)
+                return True
+
+            # ATR stop
+            if entry_price > 0 and not pd.isna(atr.iloc[-1]):
+                stop_price = entry_price - 2.0 * float(atr.iloc[-1])
+                if cur < stop_price:
+                    log.info("{} sector_rotation EXIT — ATR stop", symbol)
+                    return True
+        except Exception as e:
+            log.warning("SectorRotation.check_exit({}) error: {}", symbol, e)
         return False

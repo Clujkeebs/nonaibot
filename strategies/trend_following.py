@@ -53,7 +53,8 @@ class TrendFollowing(BaseStrategy):
         return signals
 
     def _evaluate(self, sym: str, df: pd.DataFrame) -> Signal | None:
-        close = df["close"]
+        close  = df["close"]
+        volume = df.get("volume", pd.Series(dtype=float))
 
         ema_fast   = self._ema(close, self.FAST_EMA)
         ema_slow   = self._ema(close, self.SLOW_EMA)
@@ -84,9 +85,23 @@ class TrendFollowing(BaseStrategy):
         if not (fresh_cross or continuation):
             return None
 
-        # Strength: 0.5 base + ADX contribution + theme priority
+        # Volume confirmation on fresh crossovers — quality filter
+        # (skip for crypto since volume is unreliable on fragmented exchanges)
+        vol_boost = 1.0
+        if fresh_cross and not volume.empty and len(volume) >= 20 and not _universe.is_crypto(sym):
+            avg_vol = volume.iloc[-20:-1].mean()
+            cur_vol = volume.iloc[-1]
+            if avg_vol > 0:
+                vol_ratio = cur_vol / avg_vol
+                if vol_ratio < 1.0:
+                    log.debug("{} trend SKIP — fresh cross but volume {:.2f}x avg", sym, vol_ratio)
+                    return None
+                # Reward strong volume — up to 1.2x strength bonus
+                vol_boost = min(1.2, 0.9 + 0.3 * min(vol_ratio, 2.0) / 2.0)
+
+        # Strength: 0.5 base + ADX contribution + theme priority + volume bonus
         strength = min(1.0, 0.5 + (cur_adx - self.ADX_MIN) / 50.0)
-        strength *= _universe.priority_for_symbol(sym)
+        strength *= _universe.priority_for_symbol(sym) * vol_boost
         strength  = min(1.0, strength)
 
         stop = cur_price - config.ATR_STOP_MULT * cur_atr

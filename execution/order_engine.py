@@ -53,15 +53,21 @@ CREATE TABLE IF NOT EXISTS orders (
 
 
 class OrderEngine:
-    def __init__(self) -> None:
+    def __init__(self, portfolio=None) -> None:
         self._client = TradingClient(
             api_key=config.ALPACA_API_KEY,
             secret_key=config.ALPACA_SECRET_KEY,
             paper=config.ALPACA_PAPER,
         )
         self._db = config.DB_PATH
+        self._portfolio = portfolio  # for realized P&L tracking
+        self._entry_prices: dict = {}  # symbol → avg entry for realized P&L calc
         self._init_db()
         log.info("OrderEngine initialised (paper={})", config.ALPACA_PAPER)
+
+    def attach_portfolio(self, portfolio) -> None:
+        """Allow late-binding of portfolio tracker (avoids circular init)."""
+        self._portfolio = portfolio
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -139,6 +145,16 @@ class OrderEngine:
     ) -> bool:
         side_enum = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
+        # Capture entry price BEFORE the trade for realized P&L on sells
+        avg_entry = 0.0
+        if side == "sell" and self._portfolio is not None:
+            try:
+                pos = self._portfolio.position_for(symbol)
+                if pos:
+                    avg_entry = float(pos.get("avg_price", 0))
+            except Exception:
+                pass
+
         for attempt in range(1, config.ORDER_RETRY_LIMIT + 1):
             try:
                 order_id = self._submit_order(symbol, side_enum, qty, price, is_crypto)
@@ -149,6 +165,24 @@ class OrderEngine:
                 filled = self._wait_for_fill(order_id, symbol)
                 if filled:
                     alert_trade(symbol, side, qty, price, strategy)
+                    # Track realized P&L for sells (closes / partial closes)
+                    if side == "sell" and self._portfolio is not None and avg_entry > 0:
+                        try:
+                            realized = (price - avg_entry) * qty
+                            self._portfolio.log_trade(
+                                symbol=symbol,
+                                qty=qty,
+                                price=price,
+                                side=side,
+                                strategy=strategy,
+                                realized_pl=realized,
+                            )
+                            log.info(
+                                "{} realized P&L: ${:+.2f} (entry={:.4f} exit={:.4f} qty={})",
+                                symbol, realized, avg_entry, price, qty,
+                            )
+                        except Exception as e:
+                            log.warning("log_trade error for {}: {}", symbol, e)
                     return True
                 else:
                     log.warning(

@@ -66,11 +66,17 @@ class RiskManager:
         max_dollars    = portfolio_value * config.MAX_POSITION_PCT * pos_scale
         qty_by_max_pos = max_dollars / signal.price
         raw_qty        = min(qty_by_risk, qty_by_max_pos)
-        qty            = math.floor(raw_qty)
+
+        # Use fractional shares for high-priced names so we can size correctly
+        # (Alpaca supports fractional for most large caps)
+        if signal.price > 200.0:
+            qty = round(raw_qty, 4)
+        else:
+            qty = math.floor(raw_qty)
 
         if qty <= 0:
-            log.warning("REJECT {}: qty=0 (risk={:.2f} stop={:.4f})",
-                        signal.symbol, dollar_risk, signal.stop_distance)
+            log.warning("REJECT {}: qty=0 (risk={:.2f} stop={:.4f} price={:.2f})",
+                        signal.symbol, dollar_risk, signal.stop_distance, signal.price)
             return False, "computed qty <= 0", 0.0
 
         notional = qty * signal.price
@@ -79,7 +85,8 @@ class RiskManager:
             return False, f"notional ${notional:.2f} below minimum", 0.0
 
         if notional > buying_power:
-            qty = math.floor(buying_power * 0.95 / signal.price)
+            available = buying_power * 0.95 / signal.price
+            qty = round(available, 4) if signal.price > 200.0 else math.floor(available)
             if qty <= 0:
                 log.warning("REJECT {}: insufficient buying power", signal.symbol)
                 return False, "insufficient buying power", 0.0

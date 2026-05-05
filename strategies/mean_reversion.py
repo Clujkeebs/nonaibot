@@ -2,11 +2,11 @@
 Strategy 2 — Bollinger Band Mean Reversion + RSI Oversold Filter
 
 Entry:  close < lower Bollinger Band(20, 2σ)
-        AND RSI(14) < 35
-        AND close > 200-day SMA  (we only buy dips in uptrends)
+        AND RSI(14) < 40
+        AND close > 50-day SMA   (only buy dips in stocks holding above SMA50)
         AND ADX < 30             (avoid strong downtrends)
 
-Exit:   close > middle BB  OR  RSI > 55  OR  hard stop 1.5× ATR
+Exit:   close > middle BB  OR  RSI > 55  OR  trailing stop  OR  hard 3% stop
 
 Best on: liquid large-caps, ETFs. Not used for highly volatile single-asset crypto.
 """
@@ -33,7 +33,7 @@ class MeanReversion(BaseStrategy):
     RSI_PERIOD  = 14
     RSI_ENTRY   = 40.0
     ADX_MAX     = 30.0
-    TREND_SMA   = 200
+    TREND_SMA   = 50    # was 200 — too strict in this market
     ATR_PERIOD  = 14
     STOP_MULT   = 1.5
 
@@ -56,7 +56,7 @@ class MeanReversion(BaseStrategy):
 
         bb_lower, bb_mid, _ = self._bollinger(close, self.BB_PERIOD, self.BB_STD)
         rsi    = self._rsi(close, self.RSI_PERIOD)
-        sma200 = self._sma(close, self.TREND_SMA)
+        sma_trend = self._sma(close, self.TREND_SMA)
         adx    = self._adx(df, 14)
         atr    = self._atr(df, self.ATR_PERIOD)
 
@@ -64,7 +64,7 @@ class MeanReversion(BaseStrategy):
         cur_lower  = bb_lower.iloc[-1]
         cur_mid    = bb_mid.iloc[-1]
         cur_rsi    = rsi.iloc[-1]
-        cur_sma200 = sma200.iloc[-1]
+        cur_sma_t  = sma_trend.iloc[-1]
         cur_adx    = adx.iloc[-1]
         cur_atr    = atr.iloc[-1]
 
@@ -73,7 +73,8 @@ class MeanReversion(BaseStrategy):
             return None
         if cur_rsi >= self.RSI_ENTRY:
             return None
-        if cur_close < cur_sma200:
+        if cur_close < cur_sma_t:
+            log.debug("{} mean_rev SKIP — price below SMA{}", sym, self.TREND_SMA)
             return None
         if cur_adx > self.ADX_MAX:
             return None  # in a real downtrend — skip
@@ -98,10 +99,10 @@ class MeanReversion(BaseStrategy):
             stop_price=stop,
             is_crypto=_universe.is_crypto(sym),
             metadata={
-                "bb_lower": round(cur_lower, 4),
-                "bb_mid":   round(cur_mid, 4),
-                "rsi":      round(cur_rsi, 2),
-                "sma200":   round(cur_sma200, 4),
+                "bb_lower":  round(cur_lower, 4),
+                "bb_mid":    round(cur_mid, 4),
+                "rsi":       round(cur_rsi, 2),
+                f"sma{self.TREND_SMA}": round(cur_sma_t, 4),
             },
         )
 

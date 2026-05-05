@@ -14,7 +14,6 @@ class Universe:
 
     THEMES: Dict[str, List[str]] = {
         "ai_tech":       config.AI_TECH,
-        "clean_energy":  config.CLEAN_ENERGY,
         "growth_etf":    config.GROWTH_ETFS,
         "crypto_equity": config.CRYPTO_EQUITIES,
         "core_macro":    config.CORE_MACRO,
@@ -25,8 +24,7 @@ class Universe:
     # Priority multipliers used by the portfolio allocator
     THEME_PRIORITY: Dict[str, float] = {
         "ai_tech":       1.5,
-        "clean_energy":  1.3,
-        "crypto_equity": 1.2,
+        "crypto_equity": 1.3,   # bumped — crypto-equities track best-performing asset class
         "growth_etf":    1.1,
         "core_macro":    0.8,
     }

@@ -65,7 +65,7 @@ class TradingEngine:
         self._breaker   = CircuitBreaker()
         self._regime    = RegimeFilter()
         self._risk      = RiskManager(self._regime)
-        self._exec      = OrderEngine()
+        self._exec      = OrderEngine(portfolio=self._portfolio)
 
         # Strategy registry
         self._equity_strategies = []
@@ -84,6 +84,8 @@ class TradingEngine:
 
         # Map symbol → strategy name for exit tracking
         self._position_strategy: Dict[str, str] = {}
+        # Track high-water marks for trailing stops: symbol → highest seen close
+        self._position_high: Dict[str, float] = {}
         self._seed_position_strategies()
 
         # Optional AI layer
@@ -215,20 +217,42 @@ class TradingEngine:
                 cur_price = float(df["close"].iloc[-1]) if len(df) > 0 else pos["avg_price"]
                 entry_price = pos.get("avg_price", 0)
 
-                # Hard % stop — fires before strategy logic
-                hard_stop_triggered = False
+                # Update high-water mark for trailing stop
+                prev_high = self._position_high.get(sym, entry_price)
+                new_high  = max(prev_high, cur_price)
+                self._position_high[sym] = new_high
+
+                exit_reason: Optional[str] = None
+
+                # 1. Hard % stop — absolute floor on losses
                 if entry_price > 0:
                     pnl_pct = (cur_price - entry_price) / entry_price
                     if pnl_pct <= -config.HARD_STOP_PCT:
                         log.warning("{} HARD STOP — down {:.1%} from entry {:.4f}",
                                     sym, pnl_pct, entry_price)
-                        hard_stop_triggered = True
+                        exit_reason = "hard_stop"
 
-                if hard_stop_triggered or strat.check_exit(sym, entry_price, df):
-                    if not hard_stop_triggered:
-                        log.info("Exit signal for {} from {}", sym, strat_name)
+                # 2. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
+                if exit_reason is None and entry_price > 0:
+                    armed = (new_high - entry_price) / entry_price >= config.TRAIL_ARM_PCT
+                    if armed:
+                        trail_stop = new_high * (1 - config.TRAIL_GIVEBACK_PCT)
+                        if cur_price <= trail_stop:
+                            log.warning(
+                                "{} TRAILING STOP — high={:.4f} cur={:.4f} stop={:.4f} (gains locked)",
+                                sym, new_high, cur_price, trail_stop,
+                            )
+                            exit_reason = "trailing_stop"
+
+                # 3. Strategy exit
+                if exit_reason is None and strat.check_exit(sym, entry_price, df):
+                    log.info("Exit signal for {} from {}", sym, strat_name)
+                    exit_reason = "strategy"
+
+                if exit_reason is not None:
                     self._exec.close_partial(sym, abs(qty), cur_price, is_crypto)
                     self._position_strategy.pop(sym, None)
+                    self._position_high.pop(sym, None)
                     # Freed a slot — scan immediately for a replacement
                     if is_crypto:
                         self.run_crypto_strategies()
