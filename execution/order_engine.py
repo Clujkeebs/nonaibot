@@ -174,29 +174,34 @@ class OrderEngine:
         qty: float,
         price: float,
         is_crypto: bool,
+        force_market: bool = False,
     ) -> Optional[str]:
         try:
-            if is_crypto:
-                # Limit order within 0.1% for crypto (taker fee saving)
-                limit_price = round(
-                    price * (1 + config.SLIPPAGE_LIMIT_PCT)
-                    if side == OrderSide.BUY
-                    else price * (1 - config.SLIPPAGE_LIMIT_PCT),
-                    2,
-                )
-                req = LimitOrderRequest(
-                    symbol=symbol,
-                    qty=qty,
-                    side=side,
-                    time_in_force=TimeInForce.GTC,
-                    limit_price=limit_price,
-                )
+            if is_crypto and not force_market:
+                # Limit order for buys (saves taker fee); market for sells (instant fill)
+                if side == OrderSide.BUY:
+                    limit_price = round(price * (1 + config.SLIPPAGE_LIMIT_PCT), 2)
+                    req = LimitOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=side,
+                        time_in_force=TimeInForce.GTC,
+                        limit_price=limit_price,
+                    )
+                else:
+                    # SELL: always market so exits fill immediately
+                    req = MarketOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=side,
+                        time_in_force=TimeInForce.GTC,
+                    )
             else:
                 req = MarketOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=side,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=TimeInForce.DAY if not is_crypto else TimeInForce.GTC,
                 )
 
             order = self._client.submit_order(req)
