@@ -32,6 +32,7 @@ MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.10")   # 10% per
 MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.25")   # 25% per sector
 MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
 RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.02")   # 2% risk per trade
+HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.03")   # 3% hard stop any position
 ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "1.5")    # 1.5× ATR stop
 DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% daily halt
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.07")  # 7% weekly halt
@@ -47,28 +48,24 @@ ENABLE_SECTOR_ROTATION:     bool = _bool("ENABLE_SECTOR_ROTATION",     "true")
 ENABLE_CRYPTO_MOMENTUM:     bool = _bool("ENABLE_CRYPTO_MOMENTUM",     "true")
 ENABLE_AI_LAYER:            bool = _bool("ENABLE_AI_LAYER",            "false")
 
-# ── Thematic universe ─────────────────────────────────────────────────────────
+# ── Thematic universe (20 equity symbols) ────────────────────────────────────
 AI_TECH: List[str] = [
-    "NVDA", "AMD", "MSFT", "GOOGL", "META", "AMZN", "AAPL",
-    "TSLA", "PLTR", "AI",  "IONQ", "RGTI", "SOUN", "BBAI",
-    "SMCI", "AVGO", "QCOM", "ARM",  "TSM",  "CRWD", "SNOW",
-]
-
-CLEAN_ENERGY: List[str] = [
-    "ENPH", "FSLR", "SEDG", "RUN", "NEE", "BE",
-    "PLUG", "BLDP", "FCEL", "NOVA", "ARRY",
+    "NVDA", "MSFT", "AAPL", "META", "AMZN", "GOOGL",
+    "TSLA", "AVGO", "AMD",  "PLTR", "CRWD",
 ]
 
 GROWTH_ETFS: List[str] = [
-    "QQQ", "ARKK", "ARKG", "ARKW", "BOTZ",
-    "HERO", "ICLN", "QCLN", "CIBR",
+    "QQQ", "SPY", "SMH", "NLR", "LLY",
 ]
 
 CRYPTO_EQUITIES: List[str] = [
-    "MSTR", "COIN", "MARA", "RIOT", "CLSK", "HUT",
+    "COIN", "MSTR", "MARA",
 ]
 
-CORE_MACRO: List[str] = ["SPY", "IWM", "GLD", "TLT", "DIA"]
+CORE_MACRO: List[str] = ["GLD", "TLT"]
+
+# Legacy aliases (unused but kept for SECTOR_MAP compat)
+CLEAN_ENERGY: List[str] = []
 
 CRYPTO_SYMBOLS: List[str] = [
     "BTC/USD", "ETH/USD", "SOL/USD",
@@ -78,15 +75,14 @@ CRYPTO_SYMBOLS: List[str] = [
     "SHIB/USD", "BCH/USD",
 ]
 
-# All equity symbols (deduped)
+# All equity symbols (deduped) — exactly 20
 ALL_EQUITY_SYMBOLS: List[str] = sorted(set(
-    AI_TECH + CLEAN_ENERGY + GROWTH_ETFS + CRYPTO_EQUITIES + CORE_MACRO
+    AI_TECH + GROWTH_ETFS + CRYPTO_EQUITIES + CORE_MACRO
 ))
 
 # Sector tags (used for exposure tracking)
 SECTOR_MAP: Dict[str, str] = {
     **{s: "ai_tech"        for s in AI_TECH},
-    **{s: "clean_energy"   for s in CLEAN_ENERGY},
     **{s: "growth_etf"     for s in GROWTH_ETFS},
     **{s: "crypto_equity"  for s in CRYPTO_EQUITIES},
     **{s: "core_macro"     for s in CORE_MACRO},

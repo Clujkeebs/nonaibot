@@ -211,10 +211,22 @@ class TradingEngine:
                 if df is None:
                     continue
 
-                if strat.check_exit(sym, pos["avg_price"], df):
-                    log.info("Exit signal for {} from {}", sym, strat_name)
-                    qty = pos.get("qty", 0)
-                    cur_price = float(df["close"].iloc[-1]) if len(df) > 0 else pos["avg_price"]
+                qty = pos.get("qty", 0)
+                cur_price = float(df["close"].iloc[-1]) if len(df) > 0 else pos["avg_price"]
+                entry_price = pos.get("avg_price", 0)
+
+                # Hard % stop — fires before strategy logic
+                hard_stop_triggered = False
+                if entry_price > 0:
+                    pnl_pct = (cur_price - entry_price) / entry_price
+                    if pnl_pct <= -config.HARD_STOP_PCT:
+                        log.warning("{} HARD STOP — down {:.1%} from entry {:.4f}",
+                                    sym, pnl_pct, entry_price)
+                        hard_stop_triggered = True
+
+                if hard_stop_triggered or strat.check_exit(sym, entry_price, df):
+                    if not hard_stop_triggered:
+                        log.info("Exit signal for {} from {}", sym, strat_name)
                     self._exec.close_partial(sym, abs(qty), cur_price, is_crypto)
                     self._position_strategy.pop(sym, None)
                     # Freed a slot — scan immediately for a replacement
