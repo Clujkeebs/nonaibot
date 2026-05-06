@@ -128,10 +128,22 @@ class RiskManager:
     ) -> Tuple[bool, str, float]:
         """
         Crypto flat-dollar sizing. No per-crypto allocation cap —
-        the overall portfolio heat limit (80%) is the only ceiling.
-        Target: 2.5% of portfolio per trade, $200 min, $5000 max.
+        the overall portfolio heat limit is the only ceiling.
+        Target: 3.5% of portfolio per trade.
+        Floor: MIN_NOTIONAL_CRYPTO ($25). Cap: $6000.
         """
-        target = max(200.0, min(portfolio_value * 0.035, 6000.0))
+        target = max(config.MIN_NOTIONAL_CRYPTO, min(portfolio_value * 0.035, 6000.0))
+
+        # If buying power is tight, scale down rather than reject outright.
+        if target > buying_power * 0.95:
+            scaled = buying_power * 0.95
+            if scaled < config.MIN_NOTIONAL_CRYPTO:
+                log.warning("REJECT {}: buying power {:.2f} < min {}",
+                            signal.symbol, buying_power, config.MIN_NOTIONAL_CRYPTO)
+                return False, "insufficient buying power", 0.0
+            log.info("Scaling {} target {:.2f} → {:.2f} (BP-limited)",
+                     signal.symbol, target, scaled)
+            target = scaled
 
         total_exp = sum(p.get("market_value", 0) for p in open_positions.values())
         if (total_exp + target) / portfolio_value > config.PORTFOLIO_HEAT_MAX:
@@ -140,11 +152,6 @@ class RiskManager:
                         (total_exp + target) / portfolio_value,
                         config.PORTFOLIO_HEAT_MAX)
             return False, "portfolio heat limit", 0.0
-
-        if target > buying_power * 0.95:
-            log.warning("REJECT {}: buying power {:.2f} < target {:.2f}",
-                        signal.symbol, buying_power, target)
-            return False, "insufficient buying power", 0.0
 
         qty = round(target / signal.price, 4)
         if qty <= 0:

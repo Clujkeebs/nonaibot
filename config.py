@@ -48,7 +48,7 @@ ENABLE_MEAN_REVERSION:      bool = _bool("ENABLE_MEAN_REVERSION",      "true")
 ENABLE_VOLATILITY_BREAKOUT: bool = _bool("ENABLE_VOLATILITY_BREAKOUT", "true")
 ENABLE_SECTOR_ROTATION:     bool = _bool("ENABLE_SECTOR_ROTATION",     "true")
 ENABLE_CRYPTO_MOMENTUM:     bool = _bool("ENABLE_CRYPTO_MOMENTUM",     "true")
-ENABLE_AI_LAYER:            bool = _bool("ENABLE_AI_LAYER",            "false")
+ENABLE_AI_LAYER:            bool = _bool("ENABLE_AI_LAYER",            "true")
 
 # ── Thematic universe (23 equity symbols, focused & high-quality) ───────────
 AI_TECH: List[str] = [
@@ -93,7 +93,8 @@ SECTOR_MAP: Dict[str, str] = {
 ORDER_RETRY_LIMIT: int       = _int("ORDER_RETRY_LIMIT",   "3")
 ORDER_FILL_TIMEOUT: int      = _int("ORDER_FILL_TIMEOUT",  "60")   # seconds
 SLIPPAGE_LIMIT_PCT: float    = _float("SLIPPAGE_LIMIT_PCT","0.003") # 0.3%
-MIN_NOTIONAL: float          = _float("MIN_NOTIONAL",      "100")   # $100 min order
+MIN_NOTIONAL: float          = _float("MIN_NOTIONAL",      "100")   # $100 min equity order
+MIN_NOTIONAL_CRYPTO: float   = _float("MIN_NOTIONAL_CRYPTO","25")   # $25 min crypto order
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 BARS_LOOKBACK_DAYS: int      = _int("BARS_LOOKBACK_DAYS", "350")  # needs 210+ trading days for SMA200
