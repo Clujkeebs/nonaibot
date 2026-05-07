@@ -86,6 +86,10 @@ class TradingEngine:
         self._position_strategy: Dict[str, str] = {}
         # Track high-water marks for trailing stops: symbol → highest seen close
         self._position_high: Dict[str, float] = {}
+        # Cooldown after stop-outs: symbol → datetime when re-entry is allowed.
+        # Prevents "death by a thousand cuts" — repeatedly stopping out and
+        # re-buying the same falling knife.
+        self._cooldown_until: Dict[str, datetime] = {}
         self._seed_position_strategies()
 
         # Optional AI layer
@@ -254,11 +258,23 @@ class TradingEngine:
                     self._exec.close_partial(sym, abs(qty), cur_price, is_crypto)
                     self._position_strategy.pop(sym, None)
                     self._position_high.pop(sym, None)
-                    # Freed a slot — scan immediately for a replacement
-                    if is_crypto:
-                        self.run_crypto_strategies()
-                    elif self._is_market_hours():
-                        self.run_equity_strategies()
+
+                    # Set cooldown after STOP exits so we don't re-buy a falling
+                    # knife. Strategy exits (RSI fade, EMA cross) don't get
+                    # cooldown — those are normal rotations.
+                    if exit_reason in ("hard_stop", "trailing_stop"):
+                        cooldown_h = config.COOLDOWN_HOURS_CRYPTO if is_crypto else config.COOLDOWN_HOURS_EQUITY
+                        from datetime import timedelta
+                        self._cooldown_until[sym] = datetime.now(ET) + timedelta(hours=cooldown_h)
+                        log.info("{} cooldown {}h until {}", sym, cooldown_h,
+                                 self._cooldown_until[sym].strftime("%Y-%m-%d %H:%M ET"))
+                        # Don't rescan after stop-outs — let the symbol cool off
+                    else:
+                        # Strategy exit — fine to refill the slot
+                        if is_crypto:
+                            self.run_crypto_strategies()
+                        elif self._is_market_hours():
+                            self.run_equity_strategies()
             except Exception as e:
                 log.error("check_all_exits({}) error: {}", sym, e)
 
@@ -491,6 +507,17 @@ class TradingEngine:
         for sym, sig in sorted(best.items(), key=lambda x: x[1].strength, reverse=True):
             if self._breaker.is_halted() and sig.side == "buy":
                 break
+
+            # Cooldown check — skip buys for symbols recently stopped out
+            if sig.side == "buy":
+                cooldown = self._cooldown_until.get(sym)
+                if cooldown and datetime.now(ET) < cooldown:
+                    log.info("Signal SKIPPED ({}) — cooldown until {}",
+                             sym, cooldown.strftime("%H:%M ET"))
+                    continue
+                elif cooldown:
+                    # Cooldown expired — clean up
+                    self._cooldown_until.pop(sym, None)
 
             # Apply AI rank multiplier
             if config.ENABLE_AI_LAYER and self._ai_ranker and sig.side == "buy":
