@@ -34,10 +34,10 @@ class VolatilityBreakout(BaseStrategy):
     KC_PERIOD   = 20
     ATR_PERIOD  = 14
     ATR_MULT    = 1.5        # Keltner upper multiplier
-    VOL_EXPAND  = 1.5        # ATR vs avg ATR ratio to confirm vol expansion
+    VOL_EXPAND  = 1.3        # ATR vs avg ATR ratio (was 1.5 — too strict)
     RSI_LO      = 50.0
-    RSI_HI      = 75.0
-    VOL_RATIO   = 1.5        # volume vs avg volume
+    RSI_HI      = 78.0       # was 75 — let strong breakouts through
+    VOL_RATIO   = 1.2        # volume vs avg (was 1.5)
     STOP_MULT   = 1.5
 
     def generate_signals(self, bars: Dict[str, pd.DataFrame]) -> List[Signal]:

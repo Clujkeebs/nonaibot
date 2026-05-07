@@ -85,19 +85,17 @@ class TrendFollowing(BaseStrategy):
         if not (fresh_cross or continuation):
             return None
 
-        # Volume confirmation on fresh crossovers — quality filter
-        # (skip for crypto since volume is unreliable on fragmented exchanges)
+        # Volume bonus on fresh crossovers (no longer a hard filter — too restrictive
+        # on slow days). We just reward high-volume breakouts with a strength boost.
         vol_boost = 1.0
         if fresh_cross and not volume.empty and len(volume) >= 20 and not _universe.is_crypto(sym):
             avg_vol = volume.iloc[-20:-1].mean()
             cur_vol = volume.iloc[-1]
             if avg_vol > 0:
                 vol_ratio = cur_vol / avg_vol
-                if vol_ratio < 1.0:
-                    log.debug("{} trend SKIP — fresh cross but volume {:.2f}x avg", sym, vol_ratio)
-                    return None
-                # Reward strong volume — up to 1.2x strength bonus
-                vol_boost = min(1.2, 0.9 + 0.3 * min(vol_ratio, 2.0) / 2.0)
+                # Reward strong volume up to 1.3x strength bonus, mild dampener
+                # (0.85x) for very low volume — don't kill the signal outright.
+                vol_boost = max(0.85, min(1.3, 0.7 + 0.3 * vol_ratio))
 
         # Strength: 0.5 base + ADX contribution + theme priority + volume bonus
         strength = min(1.0, 0.5 + (cur_adx - self.ADX_MIN) / 50.0)

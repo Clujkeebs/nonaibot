@@ -112,10 +112,10 @@ class LocalAssetRanker:
             if feats is None:
                 return 1.0
             pred = float(self._model.predict([feats])[0])
-            # Map predicted return to [0.5, 1.5]
-            # Typical daily return range: [-2%, +2%]
+            # Map predicted return to [0.9, 1.5] — AI can boost good signals
+            # but never significantly dampen (we don't trust it that much yet).
             multiplier = 1.0 + pred * 25  # scale
-            return float(np.clip(multiplier, 0.5, 1.5))
+            return float(np.clip(multiplier, 0.9, 1.5))
         except Exception as e:
             log.warning("AssetRanker.rank_multiplier({}) error: {}", symbol, e)
             return 1.0

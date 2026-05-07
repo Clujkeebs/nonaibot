@@ -29,12 +29,13 @@ ALPACA_PAPER: bool = _bool("ALPACA_PAPER", "true")
 
 # ── Risk ─────────────────────────────────────────────────────────────────────
 MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.10")   # 10% per symbol
-MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.25")   # 25% per sector
+MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.40")   # 40% per sector (was 25 — too tight)
 MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
 RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.02")   # 2% risk per trade
-HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.03")   # 3% hard stop any position
-TRAIL_ARM_PCT: float        = _float("TRAIL_ARM_PCT",        "0.05")   # arm trail after +5% from entry
-TRAIL_GIVEBACK_PCT: float   = _float("TRAIL_GIVEBACK_PCT",   "0.025")  # give back 2.5% from peak
+HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.03")   # 3% hard stop equity
+HARD_STOP_PCT_CRYPTO: float = _float("HARD_STOP_PCT_CRYPTO", "0.06")   # 6% hard stop crypto (more vol)
+TRAIL_ARM_PCT: float        = _float("TRAIL_ARM_PCT",        "0.08")   # arm trail after +8% from entry
+TRAIL_GIVEBACK_PCT: float   = _float("TRAIL_GIVEBACK_PCT",   "0.05")   # give back 5% from peak
 ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "1.5")    # 1.5× ATR stop
 DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% daily halt
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.07")  # 7% weekly halt

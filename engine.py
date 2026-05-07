@@ -224,12 +224,13 @@ class TradingEngine:
 
                 exit_reason: Optional[str] = None
 
-                # 1. Hard % stop — absolute floor on losses
+                # 1. Hard % stop — absolute floor on losses (crypto gets more room)
                 if entry_price > 0:
                     pnl_pct = (cur_price - entry_price) / entry_price
-                    if pnl_pct <= -config.HARD_STOP_PCT:
-                        log.warning("{} HARD STOP — down {:.1%} from entry {:.4f}",
-                                    sym, pnl_pct, entry_price)
+                    hard_limit = config.HARD_STOP_PCT_CRYPTO if is_crypto else config.HARD_STOP_PCT
+                    if pnl_pct <= -hard_limit:
+                        log.warning("{} HARD STOP — down {:.1%} from entry {:.4f} (limit {:.1%})",
+                                    sym, pnl_pct, entry_price, hard_limit)
                         exit_reason = "hard_stop"
 
                 # 2. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
