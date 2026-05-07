@@ -87,9 +87,11 @@ class TradingEngine:
         # Track high-water marks for trailing stops: symbol → highest seen close
         self._position_high: Dict[str, float] = {}
         # Cooldown after stop-outs: symbol → datetime when re-entry is allowed.
-        # Prevents "death by a thousand cuts" — repeatedly stopping out and
-        # re-buying the same falling knife.
+        # Persisted to SQLite so it survives Railway redeploys (otherwise the
+        # bot would re-buy stopped-out symbols on every push).
         self._cooldown_until: Dict[str, datetime] = {}
+        self._init_cooldown_table()
+        self._load_cooldowns()
         self._seed_position_strategies()
 
         # Optional AI layer
@@ -265,9 +267,11 @@ class TradingEngine:
                     if exit_reason in ("hard_stop", "trailing_stop"):
                         cooldown_h = config.COOLDOWN_HOURS_CRYPTO if is_crypto else config.COOLDOWN_HOURS_EQUITY
                         from datetime import timedelta
-                        self._cooldown_until[sym] = datetime.now(ET) + timedelta(hours=cooldown_h)
-                        log.info("{} cooldown {}h until {}", sym, cooldown_h,
-                                 self._cooldown_until[sym].strftime("%Y-%m-%d %H:%M ET"))
+                        until = datetime.now(ET) + timedelta(hours=cooldown_h)
+                        self._cooldown_until[sym] = until
+                        self._save_cooldown(sym, until, exit_reason)
+                        log.info("{} cooldown {}h until {} (persisted)", sym, cooldown_h,
+                                 until.strftime("%Y-%m-%d %H:%M ET"))
                         # Don't rescan after stop-outs — let the symbol cool off
                     else:
                         # Strategy exit — fine to refill the slot
@@ -592,6 +596,54 @@ class TradingEngine:
                     log.info("Seeded exit tracking: {} → {}", sym, default)
         except Exception as e:
             log.warning("_seed_position_strategies error: {}", e)
+
+    # ── Cooldown persistence (survives Railway redeploys) ────────────────────
+
+    def _init_cooldown_table(self) -> None:
+        try:
+            import sqlite3
+            with sqlite3.connect(config.DB_PATH) as c:
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS symbol_cooldowns (
+                        symbol     TEXT PRIMARY KEY,
+                        until_iso  TEXT NOT NULL,
+                        reason     TEXT
+                    )
+                """)
+        except Exception as e:
+            log.warning("_init_cooldown_table error: {}", e)
+
+    def _load_cooldowns(self) -> None:
+        try:
+            import sqlite3
+            now = datetime.now(ET)
+            with sqlite3.connect(config.DB_PATH) as c:
+                c.row_factory = sqlite3.Row
+                rows = c.execute("SELECT symbol, until_iso FROM symbol_cooldowns").fetchall()
+                for row in rows:
+                    try:
+                        until = datetime.fromisoformat(row["until_iso"])
+                        if until > now:
+                            self._cooldown_until[row["symbol"]] = until
+                        else:
+                            c.execute("DELETE FROM symbol_cooldowns WHERE symbol=?", (row["symbol"],))
+                    except Exception:
+                        pass
+            if self._cooldown_until:
+                log.info("Loaded {} active cooldowns from DB", len(self._cooldown_until))
+        except Exception as e:
+            log.warning("_load_cooldowns error: {}", e)
+
+    def _save_cooldown(self, symbol: str, until: datetime, reason: str) -> None:
+        try:
+            import sqlite3
+            with sqlite3.connect(config.DB_PATH) as c:
+                c.execute("""
+                    INSERT OR REPLACE INTO symbol_cooldowns (symbol, until_iso, reason)
+                    VALUES (?, ?, ?)
+                """, (symbol, until.isoformat(), reason))
+        except Exception as e:
+            log.warning("_save_cooldown error: {}", e)
 
     def _atr_from_df(self, df) -> float:
         """14-period ATR from an OHLCV dataframe."""

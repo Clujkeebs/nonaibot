@@ -28,19 +28,19 @@ ALPACA_SECRET_KEY: str = os.environ["ALPACA_SECRET_KEY"]
 ALPACA_PAPER: bool = _bool("ALPACA_PAPER", "true")
 
 # ── Risk ─────────────────────────────────────────────────────────────────────
-MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.10")   # 10% per symbol
-MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.40")   # 40% per sector (was 25 — too tight)
+MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.08")   # 8% per symbol (was 10 — concentrating losses)
+MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.30")   # 30% per sector (was 40)
 MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
-RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.02")   # 2% risk per trade
-HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.03")   # 3% hard stop equity
-HARD_STOP_PCT_CRYPTO: float = _float("HARD_STOP_PCT_CRYPTO", "0.06")   # 6% hard stop crypto (more vol)
+RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.015")  # 1.5% risk per trade (was 2 — bleeding)
+HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.025")  # 2.5% hard stop equity (was 3 — too late)
+HARD_STOP_PCT_CRYPTO: float = _float("HARD_STOP_PCT_CRYPTO", "0.04")   # 4% hard stop crypto (was 6)
 TRAIL_ARM_PCT: float        = _float("TRAIL_ARM_PCT",        "0.08")   # arm trail after +8% from entry
 TRAIL_GIVEBACK_PCT: float   = _float("TRAIL_GIVEBACK_PCT",   "0.05")   # give back 5% from peak
 COOLDOWN_HOURS_EQUITY: int  = _int("COOLDOWN_HOURS_EQUITY",  "24")     # no re-entry for 24h after stop
 COOLDOWN_HOURS_CRYPTO: int  = _int("COOLDOWN_HOURS_CRYPTO",  "6")      # crypto recovers faster
 ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "1.5")    # 1.5× ATR stop
-DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.03")   # 3% daily halt
-WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.07")  # 7% weekly halt
+DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.02")   # 2% daily halt (was 3 — was firing too late)
+WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.05")  # 5% weekly halt (was 7)
 MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "40")
 MIN_ATR_PCT: float          = _float("MIN_ATR_PCT",          "0.005")  # skip illiquid symbols
 PORTFOLIO_HEAT_MAX: float   = max(0.50, _float("PORTFOLIO_HEAT_MAX",   "0.80"))  # max total risk-on (floor 0.50)
