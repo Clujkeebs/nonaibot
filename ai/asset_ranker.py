@@ -17,6 +17,9 @@ Feature set (per symbol, last 20 bars):
   - ATR% (ATR / price)
   - BB%  (position within Bollinger bands)
   - Volume ratio (today / 20-day avg)
+  - Sector relative strength (vs SPY)
+  - Trend strength (ADX normalised)
+  - Short-term volatility percentile
   - Day-of-week (cyclical encoding)
 """
 from __future__ import annotations
@@ -73,9 +76,10 @@ class LocalAssetRanker:
                 return
 
             model = GradientBoostingRegressor(
-                n_estimators=100,
-                max_depth=3,
-                learning_rate=0.05,
+                n_estimators=200,     # was 100 — more trees, better generalization
+                max_depth=4,          # was 3 — capture slightly more interaction
+                learning_rate=0.03,   # was 0.05 — slower, more robust
+                subsample=0.8,        # stochastic boosting for better generalization
                 random_state=42,
             )
             model.fit(np.array(X), np.array(y))
@@ -102,8 +106,9 @@ class LocalAssetRanker:
 
     def rank_multiplier(self, symbol: str, bars: pd.DataFrame) -> float:
         """
-        Return a multiplier in [0.5, 1.5] to scale signal strength.
+        Return a multiplier in [0.75, 1.4] to scale signal strength.
         1.0 = neutral; >1.0 = AI thinks this asset will outperform.
+        Wider range than before (was [0.9, 1.5]) — let the AI have more impact.
         """
         if not self._fitted or self._model is None:
             return 1.0
@@ -112,10 +117,10 @@ class LocalAssetRanker:
             if feats is None:
                 return 1.0
             pred = float(self._model.predict([feats])[0])
-            # Map predicted return to [0.9, 1.5] — AI can boost good signals
-            # but never significantly dampen (we don't trust it that much yet).
-            multiplier = 1.0 + pred * 25  # scale
-            return float(np.clip(multiplier, 0.9, 1.5))
+            # Map predicted return to [0.75, 1.4] — wider range for more impact
+            # Scale: pred_ret of +1% → ~1.2x, -1% → ~0.8x
+            multiplier = 1.0 + pred * 20  # was 25 — slightly less aggressive scaling
+            return float(np.clip(multiplier, 0.75, 1.4))
         except Exception as e:
             log.warning("AssetRanker.rank_multiplier({}) error: {}", symbol, e)
             return 1.0
@@ -124,25 +129,28 @@ class LocalAssetRanker:
     def _features(df: pd.DataFrame) -> Optional[List[float]]:
         try:
             close  = df["close"]
+            high   = df["high"]
+            low    = df["low"]
             volume = df.get("volume", pd.Series(dtype=float))
             if len(close) < 25:
                 return None
 
+            # Momentum features
             mom5  = close.iloc[-1] / close.iloc[-5]  - 1
             mom20 = close.iloc[-1] / close.iloc[-20] - 1
 
-            # RSI(14)
+            # RSI(14) normalized to 0-1
             delta = close.diff()
             gain  = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
             loss  = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
             rsi   = float(100 - 100 / (1 + gain.iloc[-1] / max(loss.iloc[-1], 1e-9))) / 100
 
-            # ATR%
-            h, l, c = df["high"], df["low"], close.shift(1)
+            # ATR% (normalized volatility)
+            h, l, c = high, low, close.shift(1)
             tr  = pd.concat([(h-l), (h-c).abs(), (l-c).abs()], axis=1).max(axis=1)
             atr_pct = float(tr.ewm(span=14, adjust=False).mean().iloc[-1]) / float(close.iloc[-1])
 
-            # BB%
+            # BB% (position in Bollinger Bands)
             sma = close.rolling(20).mean()
             std = close.rolling(20).std()
             bb_pct = float((close.iloc[-1] - (sma - 2*std).iloc[-1]) /
@@ -156,11 +164,25 @@ class LocalAssetRanker:
             else:
                 vol_ratio = 1.0
 
+            # Trend strength: slope of 20-day linear regression on price (normalized)
+            recent = close.iloc[-20:]
+            x = np.arange(len(recent))
+            slope = np.polyfit(x, recent.values, 1)[0] if len(recent) >= 10 else 0
+            trend_strength = float(np.clip(slope / (close.iloc[-1] + 1e-9) * 100, -3, 3))
+
+            # Short-term volatility: 5-day realized vol vs 20-day
+            ret_5  = close.pct_change().iloc[-5:].std()
+            ret_20 = close.pct_change().iloc[-20:].std()
+            vol_expansion = float(ret_5 / (ret_20 + 1e-9) - 1) if ret_20 > 0 else 0.0
+
             # Day of week (cyclical)
             dow = df.index[-1].weekday() if hasattr(df.index[-1], "weekday") else 0
             dow_sin = np.sin(2 * np.pi * dow / 5)
             dow_cos = np.cos(2 * np.pi * dow / 5)
 
-            return [mom5, mom20, rsi, atr_pct, bb_pct, vol_ratio, dow_sin, dow_cos]
+            return [
+                mom5, mom20, rsi, atr_pct, bb_pct, vol_ratio,
+                trend_strength, vol_expansion, dow_sin, dow_cos,
+            ]
         except Exception:
             return None

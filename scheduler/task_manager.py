@@ -53,6 +53,16 @@ class TaskManager:
     def start(self) -> None:
         e = self._engine
 
+        # ── Opening Range Breakout (market hours, needs 5-min bars) ─────────
+        self._scheduler.add_job(
+            self._safe(e.run_opening_range),
+            IntervalTrigger(minutes=3, timezone=ET),
+            id="opening_range",
+            name="Opening Range Breakout",
+            max_instances=1,
+            coalesce=True,
+        )
+
         # ── Equity strategies (market hours only, enforced inside job) ───────
         self._scheduler.add_job(
             self._safe(e.run_equity_strategies),

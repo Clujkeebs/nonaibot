@@ -5,12 +5,21 @@ No VIX API needed. We derive a volatility proxy from SPY daily bars:
   - realized_vol = std of 20-day daily returns × sqrt(252)
   - trend_state  = SPY close vs SMA(200)
 
+Additionally applies VIX-based risk scaling: when VIX is elevated,
+position sizes are automatically reduced across all strategies.
+
+VIX scaling (uses realized vol as VIX proxy):
+  vol < 15% → 100% sizing (low vol, full size)
+  vol 15-25% → 90% sizing (normal)
+  vol 25-35% → 75% sizing (elevated)
+  vol > 35% → 60% sizing (high vol, defensive)
+
 Regime matrix:
   BULL_LOW_VOL   → all strategies at full weight
   BULL_HIGH_VOL  → reduce trend-following weight, increase mean-reversion
   BEAR_LOW_VOL   → only mean-reversion and sector rotation
   BEAR_HIGH_VOL  → all equity strategies halted; crypto-only, reduced size
-  UNKNOWN        → conservative (0.7× weights)
+  UNKNOWN        → conservative (0.8× weights)
 
 The regime is recomputed every hour and cached.
 """
@@ -36,20 +45,21 @@ class Regime(str, Enum):
 
 @dataclass
 class RegimeWeights:
-    trend_following:     float = 1.0
-    mean_reversion:      float = 1.0
-    volatility_breakout: float = 1.0
-    sector_rotation:     float = 1.0
-    crypto_momentum:     float = 1.0
-    max_position_scale:  float = 1.0   # multiply MAX_POSITION_PCT by this
+    trend_following:            float = 1.0
+    mean_reversion:             float = 1.0
+    volatility_breakout:        float = 1.0
+    sector_rotation:            float = 1.0
+    crypto_momentum:            float = 1.0
+    opening_range_breakout:     float = 1.0
+    max_position_scale:         float = 1.0   # multiply MAX_POSITION_PCT by this
 
 
 _REGIME_TABLE: Dict[Regime, RegimeWeights] = {
-    Regime.BULL_LOW_VOL:  RegimeWeights(1.0,  0.6,  1.0,  1.0,  1.0,  1.0),
-    Regime.BULL_HIGH_VOL: RegimeWeights(0.7,  1.2,  1.2,  0.8,  1.0,  0.9),
-    Regime.BEAR_LOW_VOL:  RegimeWeights(0.5,  1.2,  0.6,  1.0,  0.8,  0.8),
-    Regime.BEAR_HIGH_VOL: RegimeWeights(0.4,  0.8,  0.4,  0.6,  0.8,  0.7),
-    Regime.UNKNOWN:       RegimeWeights(0.8,  0.8,  0.8,  0.8,  0.9,  0.9),
+    Regime.BULL_LOW_VOL:  RegimeWeights(1.0,  0.6,  1.0,  1.0,  1.0,  1.0,  1.0),
+    Regime.BULL_HIGH_VOL: RegimeWeights(0.7,  1.2,  1.2,  0.8,  1.0,  0.8,  0.9),
+    Regime.BEAR_LOW_VOL:  RegimeWeights(0.5,  1.2,  0.6,  1.0,  0.8,  0.6,  0.8),
+    Regime.BEAR_HIGH_VOL: RegimeWeights(0.4,  0.8,  0.4,  0.6,  0.8,  0.4,  0.7),
+    Regime.UNKNOWN:       RegimeWeights(0.8,  0.8,  0.8,  0.8,  0.9,  0.8,  0.9),
 }
 
 VOL_HIGH_THRESHOLD = 0.35   # 35% annualised vol → "high vol"
@@ -113,4 +123,23 @@ class RegimeFilter:
         return True  # weights reduce size in bad regimes; never hard-block
 
     def max_position_scale(self) -> float:
-        return self._weights.max_position_scale
+        """
+        Return position-size multiplier combining regime weight + VIX-based
+        volatility scaling. When vol is high, we trade smaller.
+        """
+        regime_scale = self._weights.max_position_scale
+        if not config.VIX_RISK_SCALE:
+            return regime_scale
+
+        # VIX scaling based on realized vol
+        rv = self._realized_vol
+        if rv < 0.15:
+            vol_scale = 1.0
+        elif rv < 0.25:
+            vol_scale = 0.90
+        elif rv < 0.35:
+            vol_scale = 0.75
+        else:
+            vol_scale = 0.60
+
+        return regime_scale * vol_scale

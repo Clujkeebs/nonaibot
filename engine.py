@@ -42,6 +42,7 @@ from risk.risk_manager import RiskManager
 from strategies.base import Signal
 from strategies.crypto_momentum import CryptoMomentum
 from strategies.mean_reversion import MeanReversion
+from strategies.opening_range_breakout import OpeningRangeBreakout
 from strategies.regime_filter import RegimeFilter
 from strategies.sector_rotation import SectorRotation
 from strategies.trend_following import TrendFollowing
@@ -81,11 +82,15 @@ class TradingEngine:
             self._equity_strategies.append(SectorRotation())
         if config.ENABLE_CRYPTO_MOMENTUM:
             self._crypto_strategies.append(CryptoMomentum())
+        if config.ENABLE_OPENING_RANGE:
+            self._equity_strategies.append(OpeningRangeBreakout())
 
         # Map symbol → strategy name for exit tracking
         self._position_strategy: Dict[str, str] = {}
         # Track high-water marks for trailing stops: symbol → highest seen close
         self._position_high: Dict[str, float] = {}
+        # Track position entry times for time-based exits
+        self._position_opened: Dict[str, datetime] = {}
         # Cooldown after stop-outs: symbol → datetime when re-entry is allowed.
         # Persisted to SQLite so it survives Railway redeploys (otherwise the
         # bot would re-buy stopped-out symbols on every push).
@@ -144,6 +149,42 @@ class TradingEngine:
                 log.error("Strategy {} error: {}", strat.name, e)
 
         self._execute_signals(all_signals)
+
+    def run_opening_range(self) -> None:
+        """Run the ORB strategy on 1-minute bars during market hours."""
+        if not self._is_market_hours():
+            return
+        if self._breaker.is_halted():
+            return
+        if not config.ENABLE_OPENING_RANGE:
+            return
+
+        log.info("Running ORB strategy (1-min bars)...")
+        bars = self._data.get_stock_bars(
+            self._universe.equities,
+            timeframe=TimeFrame.Minute,
+            lookback_days=5,
+        )
+        if not bars:
+            log.warning("No 5-min bars for ORB")
+            return
+
+        orb_strat = self._get_strategy("opening_range_breakout")
+        if orb_strat is None:
+            return
+
+        weight = self._regime.strategy_weight(orb_strat.name)
+        if weight <= 0:
+            return
+
+        try:
+            sigs = orb_strat.generate_signals(bars)
+            for s in sigs:
+                if s.side == "buy":
+                    s.strength *= weight
+            self._execute_signals(sigs)
+        except Exception as e:
+            log.error("ORB strategy error: {}", e)
 
     def run_crypto_strategies(self) -> None:
         if self._breaker.full_halt_active():
@@ -209,9 +250,11 @@ class TradingEngine:
                 continue
 
             try:
-                # Fetch recent bars
+                # Fetch recent bars — use intraday bars for ORB strategy
                 if is_crypto:
                     bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, lookback_days=30)
+                elif strat_name == "opening_range_breakout":
+                    bars_dict = self._data.get_stock_bars([sym], TimeFrame.Minute, lookback_days=5)
                 else:
                     bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, lookback_days=40)
 
@@ -239,7 +282,22 @@ class TradingEngine:
                                     sym, pnl_pct, entry_price, hard_limit)
                         exit_reason = "hard_stop"
 
-                # 2. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
+                # 2. Time stop — kill stale positions that haven't produced
+                if exit_reason is None and entry_price > 0:
+                    pos_opened = self._position_opened.get(sym)
+                    if pos_opened:
+                        try:
+                            from datetime import timedelta
+                            age = datetime.now(ET) - pos_opened
+                            pnl_pct_stale = (cur_price - entry_price) / entry_price
+                            if age.days >= config.TIME_STOP_DAYS and pnl_pct_stale < 0.02:
+                                log.info("{} TIME STOP — {} days old with {:.1%} pnl",
+                                         sym, age.days, pnl_pct_stale)
+                                exit_reason = "time_stop"
+                        except Exception:
+                            pass
+
+                # 3. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
                 if exit_reason is None and entry_price > 0:
                     armed = (new_high - entry_price) / entry_price >= config.TRAIL_ARM_PCT
                     if armed:
@@ -251,15 +309,18 @@ class TradingEngine:
                             )
                             exit_reason = "trailing_stop"
 
-                # 3. Strategy exit
+                # 4. Strategy exit
                 if exit_reason is None and strat.check_exit(sym, entry_price, df):
                     log.info("Exit signal for {} from {}", sym, strat_name)
                     exit_reason = "strategy"
 
                 if exit_reason is not None:
-                    self._exec.close_partial(sym, abs(qty), cur_price, is_crypto)
+                    # Ensure qty is positive for close_partial
+                    close_qty = abs(float(qty)) if qty is not None else abs(float(pos.get("qty", 0)))
+                    self._exec.close_partial(sym, close_qty, cur_price, is_crypto)
                     self._position_strategy.pop(sym, None)
                     self._position_high.pop(sym, None)
+                    self._position_opened.pop(sym, None)
 
                     # Set cooldown after STOP exits so we don't re-buy a falling
                     # knife. Strategy exits (RSI fade, EMA cross) don't get
@@ -481,6 +542,8 @@ class TradingEngine:
                         log.info("Rebalance: close {} ({} overweight {:.1%})", sym, theme, overweight)
                         self._exec.close_partial(sym, pos["qty"], pos["avg_price"], is_crypto)
                         self._position_strategy.pop(sym, None)
+                        self._position_high.pop(sym, None)
+                        self._position_opened.pop(sym, None)
                     else:
                         close_qty = pos["qty"] * close_pct
                         close_qty = round(close_qty, 4) if is_crypto else math.floor(close_qty)
@@ -499,9 +562,15 @@ class TradingEngine:
         if not signals:
             return
 
-        # Deduplicate — one signal per symbol, highest strength wins
+        # Deduplicate — one signal per symbol, highest strength wins.
+        # Confluence tracks how many strategies generated a BUY, but
+        # sell signals still compete on strength (sector rotation exits
+        # must be able to override buy signals).
         best: Dict[str, Signal] = {}
+        confluence: Dict[str, int] = {}
         for sig in signals:
+            if sig.side == "buy":
+                confluence[sig.symbol] = confluence.get(sig.symbol, 0) + 1
             if sig.symbol not in best or sig.strength > best[sig.symbol].strength:
                 best[sig.symbol] = sig
 
@@ -545,6 +614,8 @@ class TradingEngine:
                     is_crypto = self._universe.is_crypto(sym)
                     self._exec.close_partial(sym, pos["qty"], sig.price, is_crypto)
                     self._position_strategy.pop(sym, None)
+                    self._position_high.pop(sym, None)
+                    self._position_opened.pop(sym, None)
                 continue
 
             # Buy signal — run through risk manager
@@ -554,6 +625,7 @@ class TradingEngine:
                 state["buying_power"],
                 positions,
                 self._portfolio.daily_pnl(),
+                confluence.get(sym, 1),
             )
             if not approved:
                 log.info("Signal REJECTED ({}) — {}: {}", sym, sig.strategy, reason)
@@ -568,6 +640,7 @@ class TradingEngine:
             )
             if success:
                 self._position_strategy[sym] = sig.strategy
+                self._position_opened[sym] = datetime.now(ET)
                 # Refresh state after each order
                 state     = self._portfolio.get_account_state()
                 positions = self._portfolio.get_open_positions()

@@ -6,7 +6,7 @@ Entry:  close < lower Bollinger Band(20, 2σ)
         AND close > 50-day SMA   (only buy dips in stocks holding above SMA50)
         AND ADX < 30             (avoid strong downtrends)
 
-Exit:   close > middle BB  OR  RSI > 55  OR  trailing stop  OR  hard 3% stop
+Exit:   close > middle BB  OR  RSI > 55  OR  trailing stop  OR  hard stop
 
 Best on: liquid large-caps, ETFs. Not used for highly volatile single-asset crypto.
 """

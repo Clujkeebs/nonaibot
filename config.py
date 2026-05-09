@@ -30,6 +30,7 @@ ALPACA_PAPER: bool = _bool("ALPACA_PAPER", "true")
 # ── Risk ─────────────────────────────────────────────────────────────────────
 MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.08")   # 8% per symbol (was 10 — concentrating losses)
 MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.30")   # 30% per sector (was 40)
+MAX_CORRELATED_PCT: float   = _float("MAX_CORRELATED_PCT",   "0.25")   # 25% cap on correlated positions
 MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
 RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.015")  # 1.5% risk per trade (was 2 — bleeding)
 HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.025")  # 2.5% hard stop equity (was 3 — too late)
@@ -44,6 +45,9 @@ WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.05")  # 5% week
 MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "40")
 MIN_ATR_PCT: float          = _float("MIN_ATR_PCT",          "0.005")  # skip illiquid symbols
 PORTFOLIO_HEAT_MAX: float   = max(0.50, _float("PORTFOLIO_HEAT_MAX",   "0.80"))  # max total risk-on (floor 0.50)
+TIME_STOP_DAYS: int         = _int("TIME_STOP_DAYS",         "15")     # close positions flat after N days
+CONFLUENCE_BONUS: float     = _float("CONFLUENCE_BONUS",     "0.25")   # extra size when 2+ strats agree
+VIX_RISK_SCALE: bool        = _bool("VIX_RISK_SCALE",        "true")   # scale positions by VIX level
 
 # ── Strategy toggles ─────────────────────────────────────────────────────────
 ENABLE_TREND_FOLLOWING:     bool = _bool("ENABLE_TREND_FOLLOWING",     "true")
@@ -51,6 +55,7 @@ ENABLE_MEAN_REVERSION:      bool = _bool("ENABLE_MEAN_REVERSION",      "true")
 ENABLE_VOLATILITY_BREAKOUT: bool = _bool("ENABLE_VOLATILITY_BREAKOUT", "true")
 ENABLE_SECTOR_ROTATION:     bool = _bool("ENABLE_SECTOR_ROTATION",     "true")
 ENABLE_CRYPTO_MOMENTUM:     bool = _bool("ENABLE_CRYPTO_MOMENTUM",     "true")
+ENABLE_OPENING_RANGE:       bool = _bool("ENABLE_OPENING_RANGE",       "true")
 ENABLE_AI_LAYER:            bool = _bool("ENABLE_AI_LAYER",            "true")
 
 # ── Thematic universe (23 equity symbols, focused & high-quality) ───────────

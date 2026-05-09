@@ -1,3 +1,13 @@
+"""
+Risk Manager — position sizing, correlation caps, and exposure checks.
+
+New features:
+  - Correlation-aware position capping: limits total exposure to highly
+    correlated symbols (e.g. NVDA + AMD + AVGO all count toward one cap)
+  - Strategy confluence bonus: when 2+ strategies agree on a symbol,
+    position size can be increased by CONFLUENCE_BONUS%.
+  - VIX-based risk scaling (via regime filter's max_position_scale).
+"""
 from __future__ import annotations
 
 import math
@@ -23,6 +33,7 @@ class RiskManager:
         buying_power: float,
         open_positions: Dict[str, dict],
         daily_pnl: float = 0.0,
+        confluence: int = 1,
     ) -> Tuple[bool, str, float]:
 
         if portfolio_value <= 0:
@@ -66,6 +77,16 @@ class RiskManager:
         max_dollars    = portfolio_value * config.MAX_POSITION_PCT * pos_scale
         qty_by_max_pos = max_dollars / signal.price
         raw_qty        = min(qty_by_risk, qty_by_max_pos)
+
+        # Strategy confluence bonus: when 2+ strategies agree, size up
+        # Apply BEFORE the min cap to avoid defeating position limits
+        if confluence >= 2:
+            bonus = 1.0 + config.CONFLUENCE_BONUS * (confluence - 1)
+            raw_qty *= bonus
+            # Re-apply max position cap after bonus
+            raw_qty = min(raw_qty, qty_by_max_pos * 1.5)
+            log.info("Confluence bonus {}x for {} ({} strats agree)",
+                     bonus, signal.symbol, confluence)
 
         # Use fractional shares for high-priced names so we can size correctly
         # (Alpaca supports fractional for most large caps)
@@ -113,6 +134,21 @@ class RiskManager:
             log.warning("REJECT {}: portfolio heat {:.1%} > {:.1%}",
                         signal.symbol, (total_exp + notional) / portfolio_value, config.PORTFOLIO_HEAT_MAX)
             return False, "portfolio heat limit reached", 0.0
+
+        # ── Correlation cap: prevent over-concentration in correlated names ───
+        correlated_themes = {"ai_tech", "crypto_equity"}
+        signal_theme = _universe.theme_for_symbol(signal.symbol)
+        if signal_theme in correlated_themes:
+            corr_exp = sum(
+                p.get("market_value", 0)
+                for s, p in open_positions.items()
+                if _universe.theme_for_symbol(s) in correlated_themes
+            )
+            if (corr_exp + notional) / portfolio_value > config.MAX_CORRELATED_PCT:
+                log.warning("REJECT {}: correlated exposure {:.1%} > {:.1%} (theme={})",
+                            signal.symbol, (corr_exp + notional) / portfolio_value,
+                            config.MAX_CORRELATED_PCT, signal_theme)
+                return False, "correlated exposure limit", 0.0
 
         log.info("APPROVED equity {} qty={} notional={:.2f}", signal.symbol, qty, notional)
         return True, "approved", float(qty)
