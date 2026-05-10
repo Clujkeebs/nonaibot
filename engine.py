@@ -487,6 +487,11 @@ class TradingEngine:
                             entry_price=entry_price,
                             entry_atr=self._atr_from_df(df),
                         )
+                        # Drawdown circuit breaker: record losses for rapid-consecutive-loss detection
+                        pnl_for_trade = (cur_price - entry_price) / entry_price if entry_price > 0 else 0
+                        if pnl_for_trade < 0:
+                            self._breaker.record_loss()
+                            self._breaker.check_drawdown_streak(min_losses=3, window_hours=1.0)
                     except Exception:
                         pass
                     self._position_strategy.pop(sym, None)
@@ -863,9 +868,9 @@ class TradingEngine:
                         # Cross-validation: scorecard scores both direction AND conviction
                         # Score < 35 = very weak/contrarian — reject buy signals here
                         # Score > 75 = strong momentum — boost conviction
-                        if sc < 35:
+                        if sc < 45:
                             log.info(
-                                "Signal REJECTED (scorecard {} {}) — score={:.0f} < 35 (conflicting)",
+                                "Signal REJECTED (scorecard {} {}) — score={:.0f} < 45 (weak setup)",
                                 sym, sig.strategy, sc,
                             )
                             continue

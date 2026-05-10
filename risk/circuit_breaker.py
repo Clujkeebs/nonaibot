@@ -57,6 +57,7 @@ class CircuitBreaker:
     def __init__(self, db_path: str = config.DB_PATH) -> None:
         self._db   = db_path
         self._kill = _env_kill()
+        self._loss_timestamps: list = []   # recent losing trade timestamps
         self._init_db()
         log.info("CircuitBreaker initialised — kill_switch={}", self._kill)
 
@@ -155,6 +156,33 @@ class CircuitBreaker:
             self.trigger(
                 HaltLevel.FULL_HALT,
                 f"Weekly loss {loss_pct:.2%} ≥ limit {config.WEEKLY_LOSS_LIMIT_PCT:.2%}",
+            )
+
+    # ── Drawdown tracker: halt on rapid consecutive losses ─────────────────
+    # Track recent losing trades to detect momentum crush.
+    def record_loss(self) -> None:
+        """Call this after each closing trade that was a loss."""
+        now = datetime.now(ET)
+        self._loss_timestamps.append(now)
+        # Prune entries older than 1 hour
+        self._loss_timestamps = [
+            t for t in self._loss_timestamps
+            if (now - t).total_seconds() < 3600
+        ]
+
+    def check_drawdown_streak(self, min_losses: int = 3, window_hours: float = 1.0) -> None:
+        """Halt if too many losing trades happened within a short window (momentum crush)."""
+        if not hasattr(self, "_loss_timestamps"):
+            return
+        now = datetime.now(ET)
+        recent = [
+            t for t in self._loss_timestamps
+            if (now - t).total_seconds() < window_hours * 3600
+        ]
+        if len(recent) >= min_losses:
+            self.trigger(
+                HaltLevel.TRADE_HALT,
+                f"Drawdown streak: {len(recent)} losses in {window_hours:.0f}h (momentum crush)",
             )
 
 

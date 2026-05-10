@@ -28,11 +28,11 @@ ALPACA_SECRET_KEY: str = os.environ["ALPACA_SECRET_KEY"]
 ALPACA_PAPER: bool = _bool("ALPACA_PAPER", "true")
 
 # ── Risk ─────────────────────────────────────────────────────────────────────
-MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.08")   # 8% per symbol (was 10 — concentrating losses)
-MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.30")   # 30% per sector (was 40)
-MAX_CORRELATED_PCT: float   = _float("MAX_CORRELATED_PCT",   "0.25")   # 25% cap on correlated positions
+MAX_POSITION_PCT: float     = _float("MAX_POSITION_PCT",     "0.05")   # 5% per symbol (was 8 — reduced to prevent over-concentration)
+MAX_SECTOR_PCT: float       = _float("MAX_SECTOR_PCT",       "0.25")   # 25% per sector (was 30)
+MAX_CORRELATED_PCT: float   = _float("MAX_CORRELATED_PCT",   "0.20")   # 20% cap on correlated positions (was 25)
 MAX_CRYPTO_PCT: float       = _float("MAX_CRYPTO_PCT",       "1.0")    # no hard crypto cap
-RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.015")  # 1.5% risk per trade (was 2 — bleeding)
+RISK_PER_TRADE_PCT: float   = _float("RISK_PER_TRADE_PCT",   "0.01")   # 1.0% risk per trade (was 1.5 — more conservative)
 HARD_STOP_PCT: float        = _float("HARD_STOP_PCT",        "0.025")  # 2.5% hard stop equity (was 3 — too late)
 HARD_STOP_PCT_CRYPTO: float = _float("HARD_STOP_PCT_CRYPTO", "0.04")   # 4% hard stop crypto (was 6)
 TRAIL_ARM_PCT: float        = _float("TRAIL_ARM_PCT",        "0.08")   # arm trail after +8% from entry
@@ -44,7 +44,7 @@ DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.02")   # 2% dail
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.05")  # 5% weekly halt (was 7)
 MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "40")
 MIN_ATR_PCT: float          = _float("MIN_ATR_PCT",          "0.005")  # skip illiquid symbols
-PORTFOLIO_HEAT_MAX: float   = max(0.50, _float("PORTFOLIO_HEAT_MAX",   "0.80"))  # max total risk-on (floor 0.50)
+PORTFOLIO_HEAT_MAX: float   = max(0.40, _float("PORTFOLIO_HEAT_MAX",   "0.70"))  # max total risk-on (floor 0.40, was 0.80)
 TIME_STOP_DAYS: int         = _int("TIME_STOP_DAYS",         "15")     # close positions flat after N days
 CONFLUENCE_BONUS: float     = _float("CONFLUENCE_BONUS",     "0.25")   # extra size when 2+ strats agree
 VIX_RISK_SCALE: bool        = _bool("VIX_RISK_SCALE",        "true")   # scale positions by VIX level

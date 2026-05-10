@@ -50,9 +50,11 @@ class CryptoMomentum(BaseStrategy):
     MOM_LOOKBACK = 24    # hours for return check
     MOM_MIN     = 0.02   # 2% minimum 24h return — was 1%
 
-    # Weekend boost for BTC/ETH
-    WEEKEND_SYMBOLS = {"BTC/USD", "ETH/USD"}
-    WEEKEND_MULT    = 1.2
+    # Weekend boost REMOVED — weekends are riskier for crypto (thin books,
+    # DeFi liquidations, lower institutional volume). Entering at 1.2× strength
+    # on weekends was causing entries just before sharp reversals.
+    # WEEKEND_SYMBOLS = {"BTC/USD", "ETH/USD"}
+    # WEEKEND_MULT    = 1.2
 
     def generate_signals(self, bars: Dict[str, pd.DataFrame]) -> List[Signal]:
         signals: List[Signal] = []
@@ -126,10 +128,9 @@ class CryptoMomentum(BaseStrategy):
         if len(close) >= self.MOM_LOOKBACK:
             strength *= min(1.3, 1.0 + ret_24h * 3)
 
-        # Weekend / overnight bonus
-        now = datetime.now(ET)
-        if sym in self.WEEKEND_SYMBOLS and now.weekday() >= 5:
-            strength = min(1.0, strength * self.WEEKEND_MULT)
+        # Weekend / overnight bonus — REMOVED
+        # Weekends are high-risk in crypto: thin books, liquidation cascades,
+        # lower institutional volume. Removed the 1.2× strength boost.
 
         stop_mult = 2.0
         if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
@@ -153,7 +154,9 @@ class CryptoMomentum(BaseStrategy):
             },
         )
 
-    PROFIT_TAKE_PCT = 0.08   # close when up 8%
+    # More conservative exits to prevent giveback:
+    PROFIT_TAKE_PCT = 0.05   # close when up 5% (was 8% — 8% target rarely hit in volatile crypto)
+    HARD_STOP_PCT   = 0.025  # hard stop at -2.5% (no exit can exceed this)
 
     def check_exit(
         self,
