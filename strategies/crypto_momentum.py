@@ -156,7 +156,6 @@ class CryptoMomentum(BaseStrategy):
 
     # More conservative exits to prevent giveback:
     PROFIT_TAKE_PCT = 0.05   # close when up 5% (was 8% — 8% target rarely hit in volatile crypto)
-    HARD_STOP_PCT   = 0.025  # hard stop at -2.5% (no exit can exceed this)
 
     def check_exit(
         self,
