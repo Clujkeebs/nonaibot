@@ -145,6 +145,26 @@ class OrderEngine:
     ) -> bool:
         side_enum = OrderSide.BUY if side == "buy" else OrderSide.SELL
 
+        # ── Idempotency key: prevent duplicate orders on restart ───────────
+        # Key = symbol+side+strategy rounded to the current 5-min window.
+        # Orders in the same window with same key are deduplicated.
+        # Survives restarts since pending orders are tracked in SQLite.
+        now = datetime.now(ET)
+        window = now.replace(minute=(now.minute // 5) * 5, second=0, microsecond=0)
+        idempotency_key = f"{symbol}|{side}|{strategy}|{window.isoformat()}"
+        try:
+            with self._conn() as c:
+                existing = c.execute(
+                    "SELECT order_id, status FROM orders WHERE symbol=? AND side=? AND strategy=? AND created_at >= ? ORDER BY id DESC LIMIT 1",
+                    (symbol, side, strategy, window.isoformat()),
+                ).fetchone()
+                if existing and existing["status"] in ("pending", "partial_fill", "accepted"):
+                    log.info("Idempotency: {} skipped (order {} already pending)",
+                             idempotency_key, existing["order_id"])
+                    return False
+        except Exception:
+            pass
+
         # Capture entry price BEFORE the trade for realized P&L on sells
         avg_entry = 0.0
         if side == "sell" and self._portfolio is not None:

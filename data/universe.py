@@ -39,6 +39,12 @@ class Universe:
                     seen.add(s)
                     self._equities.append(s)
 
+        # Precompute crypto set for O(1) is_crypto lookups
+        self._crypto_set: set[str] = set()
+        for s in self.CRYPTO:
+            self._crypto_set.add(s)
+            self._crypto_set.add(s.replace("/", ""))  # also add no-slash version
+
     # ── Public accessors ──────────────────────────────────────────────────────
 
     @property
@@ -64,4 +70,5 @@ class Universe:
         return self._equities + self.CRYPTO
 
     def is_crypto(self, symbol: str) -> bool:
-        return "/" in symbol or symbol in [s.replace("/", "") for s in self.CRYPTO]
+        """O(1) crypto check using precomputed set."""
+        return symbol in self._crypto_set

@@ -702,6 +702,8 @@ class TradingEngine:
                         self._position_strategy.pop(sym, None)
                         self._position_high.pop(sym, None)
                         self._position_opened.pop(sym, None)
+                        # Clean up all persisted position metadata
+                        self._cleanup_position_meta(sym)
                     else:
                         close_qty = pos["qty"] * close_pct
                         close_qty = round(close_qty, 4) if is_crypto else math.floor(close_qty)
@@ -1002,16 +1004,16 @@ class TradingEngine:
         except Exception as e:
             log.warning("_load_cooldowns error: {}", e)
 
-    def _cleanup_position_meta(self, symbol: str) -> None:
+    def _cleanup_position_meta(self, sym: str) -> None:
         """Clean up all position metadata on exit — position age, ORB guard."""
         try:
             import sqlite3
             with sqlite3.connect(config.DB_PATH) as c:
-                c.execute("DELETE FROM position_ages WHERE symbol=?", (symbol,))
+                c.execute("DELETE FROM position_ages WHERE symbol=?", (sym,))
         except Exception:
             pass
-        self._position_opened.pop(symbol, None)
-        self._orb_traded_today.discard(symbol)
+        self._position_opened.pop(sym, None)
+        self._orb_traded_today.discard(sym)
 
     def _save_cooldown(self, symbol: str, until: datetime, reason: str) -> None:
         try:

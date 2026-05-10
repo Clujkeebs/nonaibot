@@ -95,11 +95,25 @@ class CircuitBreaker:
     # ── Trigger / reset ───────────────────────────────────────────────────────
 
     def trigger(self, level: HaltLevel, reason: str) -> None:
-        now = datetime.now(ET).isoformat()
+        # Alert cooldown: don't spam Slack/email if the same event fired recently
+        now = datetime.now(ET)
+        if hasattr(self, "_last_alert_at") and self._last_alert_at:
+            if (now - self._last_alert_at).total_seconds() < 300:  # 5-min cooldown
+                log.info("CircuitBreaker {} skipped (alert cooldown — {:.0f}s since last)",
+                         level, (now - self._last_alert_at).total_seconds())
+                # Still persist the state change even if we skip the alert
+                with self._conn() as c:
+                    c.execute(
+                        "UPDATE circuit_breaker SET level=?, reason=?, triggered_at=?, reset_at=NULL WHERE id=1",
+                        (level, reason, now.isoformat()),
+                    )
+                return
+        self._last_alert_at = now
+
         with self._conn() as c:
             c.execute(
                 "UPDATE circuit_breaker SET level=?, reason=?, triggered_at=?, reset_at=NULL WHERE id=1",
-                (level, reason, now),
+                (level, reason, now.isoformat()),
             )
         log.warning("CircuitBreaker TRIGGERED: {} — {}", level, reason)
         alert_circuit_break(reason, level)
