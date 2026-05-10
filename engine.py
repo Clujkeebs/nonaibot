@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, timedelta, time as dtime
 from typing import Dict, List, Optional
 
 import pytz
@@ -55,6 +55,8 @@ from ai.trade_journal import TradeJournal
 from ai.position_sizer import AIPositionSizer
 from ai.strategy_allocator import AIStrategyAllocator
 from ai.exit_optimizer import AIExitOptimizer
+from ai.sentiment import SentimentAnalyzer
+from ai.scorecard import TechnicalScorecard
 
 from alpaca.data.timeframe import TimeFrame
 
@@ -104,6 +106,8 @@ class TradingEngine:
         self._init_cooldown_table()
         self._load_cooldowns()
         self._seed_position_strategies()
+        # VIX data for dynamic risk scaling
+        self._vix_level: float = 20.0  # default neutral VIX
 
         # Optional AI layer
         self._ai_ranker = None
@@ -112,10 +116,18 @@ class TradingEngine:
         self._ai_position_sizer = None
         self._ai_strategy_alloc = None
         self._ai_exit_optimizer = None
+        self._ai_sentiment = None
+        self._ai_scorecard = None
         # Set far in the past so the first _refresh_ai_models() in __init__ actually runs
         self._last_ai_refresh = datetime(2000, 1, 1, tzinfo=ET)
         if config.ENABLE_AI_LAYER:
             self._init_ai()
+
+        # Inject AI exit optimizer into all strategies (needed for adaptive stops)
+        for strat in self._equity_strategies + self._crypto_strategies:
+            if hasattr(strat, "attach_exit_optimizer") and self._ai_exit_optimizer:
+                strat.attach_exit_optimizer(self._ai_exit_optimizer)
+                log.debug("Injected AI exit optimizer into {}", strat.name)
 
         # Update regime immediately
         self.update_regime()
@@ -293,6 +305,9 @@ class TradingEngine:
                 cur_price = float(df["close"].iloc[-1]) if len(df) > 0 else pos["avg_price"]
                 entry_price = pos.get("avg_price", 0)
 
+                # Compute ATR early — needed for both hard stop ATR check and trailing stop
+                atr = self._atr_from_df(df)
+
                 # Update high-water mark for trailing stop
                 prev_high = self._position_high.get(sym, entry_price)
                 new_high  = max(prev_high, cur_price)
@@ -301,6 +316,7 @@ class TradingEngine:
                 exit_reason: Optional[str] = None
 
                 # 1. Hard % stop — absolute floor on losses (crypto gets more room)
+                pnl_pct = 0.0
                 if entry_price > 0:
                     pnl_pct = (cur_price - entry_price) / entry_price
                     hard_limit = config.HARD_STOP_PCT_CRYPTO if is_crypto else config.HARD_STOP_PCT
@@ -309,14 +325,21 @@ class TradingEngine:
                                     sym, pnl_pct, entry_price, hard_limit)
                         exit_reason = "hard_stop"
 
+                # 1b. ATR-based stop — fires independently (not elif of hard stop)
+                # Guard against NaN atr
+                if exit_reason is None and atr > 0 and math.isfinite(atr) and entry_price > 0:
+                    if cur_price < entry_price - config.ATR_STOP_MULT * atr:
+                        log.warning("{} ATR STOP — down {:.1%} from entry ({}×ATR)",
+                                    sym, pnl_pct, config.ATR_STOP_MULT)
+                        exit_reason = "atr_stop"
+
                 # 2. Time stop — kill stale positions that haven't produced
                 if exit_reason is None and entry_price > 0:
                     pos_opened = self._position_opened.get(sym)
                     if pos_opened:
                         try:
-                            from datetime import timedelta
                             age = datetime.now(ET) - pos_opened
-                            pnl_pct_stale = (cur_price - entry_price) / entry_price
+                            pnl_pct_stale = (cur_price - entry_price) / entry_price if entry_price > 0 else 0
                             # Use AI-optimized time stop if available
                             time_stop_days = config.TIME_STOP_DAYS
                             if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
@@ -326,18 +349,40 @@ class TradingEngine:
                                     )
                                 except Exception:
                                     pass
+                            # Time stop: close if held too long AND not showing enough profit
                             if age.days >= time_stop_days and pnl_pct_stale < 0.02:
                                 log.info("{} TIME STOP — {} days old with {:.1%} pnl (limit {}d)",
                                          sym, age.days, pnl_pct_stale, time_stop_days)
                                 exit_reason = "time_stop"
+                            # Also exit on time stop if down significantly (stop-out alternative)
+                            elif age.days >= max(3, time_stop_days // 2) and pnl_pct_stale < -0.015:
+                                log.info("{} EARLY TIME STOP — {} days old with {:.1%} loss",
+                                         sym, age.days, pnl_pct_stale)
+                                exit_reason = "early_time_stop"
                         except Exception:
                             pass
 
                 # 3. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
+                # 3. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
                 if exit_reason is None and entry_price > 0:
-                    armed = (new_high - entry_price) / entry_price >= config.TRAIL_ARM_PCT
-                    if armed:
-                        trail_stop = new_high * (1 - config.TRAIL_GIVEBACK_PCT)
+                    if entry_price > 0:
+                        pnl_pct = (new_high - entry_price) / entry_price
+                    else:
+                        pnl_pct = 0
+                    if pnl_pct >= config.TRAIL_ARM_PCT:
+                        # Dynamic trailing stop: use tighter giveback in high-vol environments
+                        # Base giveback on ATR as % of price, scaled by current regime
+                        if atr > 0 and math.isfinite(atr) and entry_price > 0:
+                            # ATR-based giveback: volatile markets = wider giveback, calm = tighter
+                            atr_giveback = 2.0 * atr / new_high  # 2× ATR as % of peak
+                            # Scale between TRAIL_GIVEBACK_PCT (5%) and 2× ATR giveback
+                            trail_pct = min(0.20, max(config.TRAIL_GIVEBACK_PCT, atr_giveback))
+                            # Additional VIX scaling: if VIX > 25, widen the trail slightly
+                            if self._vix_level > 25:
+                                trail_pct = min(0.25, trail_pct * 1.25)
+                        else:
+                            trail_pct = config.TRAIL_GIVEBACK_PCT
+                        trail_stop = new_high * (1 - trail_pct)
                         if cur_price <= trail_stop:
                             log.warning(
                                 "{} TRAILING STOP — high={:.4f} cur={:.4f} stop={:.4f} (gains locked)",
@@ -349,6 +394,17 @@ class TradingEngine:
                 if exit_reason is None and strat.check_exit(sym, entry_price, df):
                     log.info("Exit signal for {} from {}", sym, strat_name)
                     exit_reason = "strategy"
+
+                # 4b. AI take-profit: use AI exit optimizer's tp_ratio
+                if exit_reason is None and config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+                    tp_ratio = self._ai_exit_optimizer.adjust_tp_ratio(strat_name or "unknown", default_ratio=2.0)
+                    if tp_ratio > 0 and entry_price > 0 and atr > 0 and math.isfinite(atr):
+                        stop_dist = config.ATR_STOP_MULT * atr
+                        tp_target = entry_price + tp_ratio * stop_dist
+                        if cur_price >= tp_target:
+                            log.info("{} AI TAKE-PROFIT — up {:.1%} (target {:.4f} hit)",
+                                     sym, (cur_price - entry_price) / entry_price, tp_target)
+                            exit_reason = "ai_take_profit"
 
                 if exit_reason is not None:
                     # Ensure qty is positive for close_partial
@@ -374,13 +430,11 @@ class TradingEngine:
                     # cooldown — those are normal rotations.
                     if exit_reason in ("hard_stop", "trailing_stop"):
                         cooldown_h = config.COOLDOWN_HOURS_CRYPTO if is_crypto else config.COOLDOWN_HOURS_EQUITY
-                        from datetime import timedelta
                         until = datetime.now(ET) + timedelta(hours=cooldown_h)
                         self._cooldown_until[sym] = until
                         self._save_cooldown(sym, until, exit_reason)
                         log.info("{} cooldown {}h until {} (persisted)", sym, cooldown_h,
                                  until.strftime("%Y-%m-%d %H:%M ET"))
-                        # Don't rescan after stop-outs — let the symbol cool off
                     else:
                         # Strategy exit — fine to refill the slot
                         if is_crypto:
@@ -416,6 +470,9 @@ class TradingEngine:
                 state = self._ai_regime.predict(spy) if spy is not None else None
                 if state is not None:
                     log.info("AI regime state: {}", state)
+
+            # Fetch VIX for dynamic risk scaling
+            self._update_vix()
         except Exception as e:
             log.error("update_regime error: {}", e)
 
@@ -488,7 +545,10 @@ class TradingEngine:
                             "Scale-out {}: uPnL={:.2f} < -1.5×ATR×qty ({:.2f}) — closing 50%",
                             sym, unrealized_pl, -(1.5 * atr * qty),
                         )
-                        self._exec.close_partial(sym, scale_qty, avg_price, is_crypto)
+                        # Use current price (cur_price from df), not avg_price
+                        cur_p = float(df["close"].iloc[-1]) if len(df) > 0 else avg_price
+                        self._exec.close_partial(sym, scale_qty, cur_p, is_crypto)
+                        continue  # Skip pyramid check this iteration after scale-out
 
                 # ── Pyramid: add to winners ───────────────────────────────────
                 elif (
@@ -499,6 +559,20 @@ class TradingEngine:
                     strat_name = self._position_strategy.get(sym)
                     strat = self._get_strategy(strat_name)
                     if strat is None:
+                        continue
+
+                    # AI-guided pyramid: check scorecard and sentiment
+                    ai_confidence = 1.0
+                    if self._ai_scorecard:
+                        ai_confidence *= self._ai_scorecard.get_multiplier(sym)
+                    if self._ai_sentiment:
+                        headlines = self._ai_sentiment.get_recent_headlines(sym, hours=48)
+                        if headlines:
+                            ai_confidence *= self._ai_sentiment.sentiment_multiplier(sym, headlines)
+
+                    # Only pyramid if AI confidence is high enough
+                    if ai_confidence < 0.9:
+                        log.debug("Pyramid skip {}: AI confidence={:.2f}", sym, ai_confidence)
                         continue
 
                     try:
@@ -515,12 +589,15 @@ class TradingEngine:
                         market_value * 0.5,
                         state["portfolio_value"] * config.MAX_POSITION_PCT * 0.5,
                     )
+                    # AI-boosted pyramid: scale up when confidence is high
+                    if ai_confidence > 1.2:
+                        add_value = min(add_value * 1.25, state["portfolio_value"] * config.MAX_POSITION_PCT * 0.625)
                     add_qty = round(add_value / sig.price, 4) if is_crypto else math.floor(add_value / sig.price)
 
                     if add_qty > 0 and add_value <= state["buying_power"] * 0.9:
                         log.info(
-                            "Pyramid {}: uPnL={:.2f} strategy still bullish — adding {} units",
-                            sym, unrealized_pl, add_qty,
+                            "Pyramid {}: uPnL={:.2f} AI_conf={:.2f} — adding {} units",
+                            sym, unrealized_pl, ai_confidence, add_qty,
                         )
                         success = self._exec.buy(
                             symbol=sym,
@@ -585,9 +662,20 @@ class TradingEngine:
                     close_value = min(pos["market_value"], trim_value - trimmed)
                     close_pct   = close_value / pos["market_value"] if pos["market_value"] > 0 else 1.0
 
+                    # Get current price for the close
+                    try:
+                        if is_crypto:
+                            bars_dict = self._data.get_crypto_bars([sym], TimeFrame.Hour, 5)
+                        else:
+                            bars_dict = self._data.get_stock_bars([sym], TimeFrame.Day, 5)
+                        df_sym = bars_dict.get(sym)
+                        close_price = float(df_sym["close"].iloc[-1]) if df_sym is not None and len(df_sym) > 0 else pos["avg_price"]
+                    except Exception:
+                        close_price = pos["avg_price"]
+
                     if close_pct >= 0.90:
                         log.info("Rebalance: close {} ({} overweight {:.1%})", sym, theme, overweight)
-                        self._exec.close_partial(sym, pos["qty"], pos["avg_price"], is_crypto)
+                        self._exec.close_partial(sym, pos["qty"], close_price, is_crypto)
                         self._position_strategy.pop(sym, None)
                         self._position_high.pop(sym, None)
                         self._position_opened.pop(sym, None)
@@ -596,7 +684,7 @@ class TradingEngine:
                         close_qty = round(close_qty, 4) if is_crypto else math.floor(close_qty)
                         if close_qty > 0:
                             log.info("Rebalance: trim {} {} ({} OW {:.1%})", sym, close_qty, theme, overweight)
-                            self._exec.close_partial(sym, close_qty, pos["avg_price"], is_crypto)
+                            self._exec.close_partial(sym, close_qty, close_price, is_crypto)
 
                     trimmed += close_value
 
@@ -654,6 +742,36 @@ class TradingEngine:
                 except Exception:
                     pass
 
+            # Apply technical scorecard multiplier (free AI — no external APIs)
+            if config.ENABLE_AI_LAYER and self._ai_scorecard and sig.side == "buy":
+                try:
+                    bars_dict = (
+                        self._data.get_crypto_bars([sym], TimeFrame.Hour, 30)
+                        if sig.is_crypto
+                        else self._data.get_stock_bars([sym], TimeFrame.Day, 30)
+                    )
+                    df = bars_dict.get(sym)
+                    if df is not None:
+                        score_mult = self._ai_scorecard.get_multiplier(sym)
+                        sig.strength = min(1.0, sig.strength * score_mult)
+                        if score_mult != 1.0:
+                            log.debug("Scorecard {}: score={:.0f} mult={:.2f}",
+                                     sym, self._ai_scorecard.get_score(sym), score_mult)
+                except Exception:
+                    pass
+
+            # Apply sentiment multiplier (free AI)
+            if config.ENABLE_AI_LAYER and self._ai_sentiment and sig.side == "buy":
+                try:
+                    headlines = self._ai_sentiment.get_recent_headlines(sym, hours=48)
+                    if headlines:
+                        sent_mult = self._ai_sentiment.sentiment_multiplier(sym, headlines)
+                        sig.strength = min(1.0, sig.strength * sent_mult)
+                        log.debug("Sentiment {}: score={:.2f} mult={:.2f}",
+                                 sym, self._ai_sentiment.get_sentiment(sym), sent_mult)
+                except Exception:
+                    pass
+
             if sig.side == "sell":
                 # Sell signal (e.g. sector rotation exit) — only act if we hold it
                 if sym in positions:
@@ -684,6 +802,9 @@ class TradingEngine:
                 except Exception:
                     pass
 
+            # VIX-based risk scaling: reduce exposure when VIX is high
+            vix_scale = self._vix_scale()
+
             # Run through risk manager
             approved, reason, qty = self._risk.check_signal(
                 sig,
@@ -692,7 +813,7 @@ class TradingEngine:
                 positions,
                 self._portfolio.daily_pnl(),
                 confluence.get(sym, 1),
-                ai_mult,
+                ai_mult * vix_scale,
             )
             if not approved:
                 log.info("Signal REJECTED ({}) — {}: {}", sym, sig.strategy, reason)
@@ -749,6 +870,10 @@ class TradingEngine:
                     default = "crypto_momentum" if self._universe.is_crypto(sym) else "trend_following"
                     self._position_strategy[sym] = default
                     log.info("Seeded exit tracking: {} → {}", sym, default)
+                # Don't seed _position_high here — let check_all_exits set a real
+                # high-water mark from live price data. Seeding with avg_price (entry)
+                # would cause the trailing stop to immediately arm on any profitable
+                # position held overnight, which is wrong.
         except Exception as e:
             log.warning("_seed_position_strategies error: {}", e)
 
@@ -800,6 +925,43 @@ class TradingEngine:
         except Exception as e:
             log.warning("_save_cooldown error: {}", e)
 
+    def _update_vix(self) -> None:
+        """Fetch VIX level for dynamic risk scaling."""
+        try:
+            vix_bars = self._data.get_stock_bars(["VIXY"], TimeFrame.Day, lookback_days=5)
+            vix_df = vix_bars.get("VIXY")
+            if vix_df is not None and len(vix_df) > 0:
+                self._vix_level = float(vix_df["close"].iloc[-1])
+                log.debug("VIX level: %.2f", self._vix_level)
+            else:
+                # Fallback: derive from SPY realized vol
+                spy_bars = self._data.get_stock_bars(["SPY"], TimeFrame.Day, lookback_days=20)
+                spy_df = spy_bars.get("SPY")
+                if spy_df is not None:
+                    ret_std = float(spy_df["close"].pct_change().tail(20).std())
+                    self._vix_level = max(12.0, ret_std * 100 * (20 ** 0.5))  # annualise
+                    log.debug("VIX fallback (SPY-derived): %.2f", self._vix_level)
+                else:
+                    log.debug("VIX unavailable - using default %.2f", self._vix_level)
+        except Exception:
+            pass  # keep previous VIX level
+
+    def _vix_scale(self) -> float:
+        """Return a position scale factor based on VIX. High VIX = reduce risk."""
+        if not config.VIX_RISK_SCALE:
+            return 1.0
+        vix = self._vix_level
+        if vix >= 30:
+            return 0.5
+        elif vix >= 25:
+            return 0.7
+        elif vix >= 20:
+            return 0.85
+        elif vix >= 15:
+            return 1.0
+        else:
+            return 1.15
+
     def _atr_from_df(self, df) -> float:
         """14-period ATR from an OHLCV dataframe."""
         try:
@@ -842,6 +1004,22 @@ class TradingEngine:
                 log.info("AI: scikit-learn not installed — ranker disabled")
         except Exception as e:
             log.warning("AI ranker init error: {}", e)
+
+        # ── AI Technical Scorecard ─────────────────────────────────────────
+        try:
+            self._ai_scorecard = TechnicalScorecard()
+            log.info("AI technical scorecard active")
+        except Exception as e:
+            log.warning("AI scorecard init error: {}", e)
+
+        # ── AI Sentiment Analyzer ───────────────────────────────────────────
+        if config.ENABLE_AI_LAYER:
+            try:
+                self._ai_sentiment = SentimentAnalyzer()
+                self._ai_sentiment.load()
+                log.info("AI sentiment analyzer active")
+            except Exception as e:
+                log.warning("AI sentiment init error: {}", e)
 
         try:
             from ai.regime_detector import LocalRegimeDetector
@@ -918,3 +1096,30 @@ class TradingEngine:
                 self._ai_exit_optimizer.refresh(all_strats)
             except Exception as e:
                 log.warning("AI exit optimizer refresh error: {}", e)
+
+        # ── AI Technical Scorecard refresh ─────────────────────────────────
+        if self._ai_scorecard:
+            try:
+                bars = self._data.get_stock_bars(
+                    self._universe.equities, TimeFrame.Day, 200
+                )
+                if bars:
+                    self._ai_scorecard.update_scores(bars)
+                    top = self._ai_scorecard.top_n(3, min_score=50.0)
+                    if top:
+                        log.info("AI Scorecard top: {}", top)
+            except Exception as e:
+                log.warning("AI scorecard refresh error: {}", e)
+
+        # ── AI Sentiment refresh ────────────────────────────────────────────
+        if self._ai_sentiment:
+            try:
+                news_by_symbol: Dict[str, List[str]] = {}
+                for sym in self._universe.equities[:10]:  # top 10 only to limit API calls
+                    headlines = self._ai_sentiment.get_recent_headlines(sym, hours=48)
+                    if headlines:
+                        news_by_symbol[sym] = headlines
+                if news_by_symbol:
+                    self._ai_sentiment.refresh(news_by_symbol)
+            except Exception as e:
+                log.warning("AI sentiment refresh error: {}", e)

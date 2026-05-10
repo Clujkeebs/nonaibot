@@ -62,6 +62,15 @@ ENABLE_AI_STRATEGY_ALLOC:   bool = _bool("ENABLE_AI_STRATEGY_ALLOC",   "true")  
 ENABLE_AI_EXIT_OPT:         bool = _bool("ENABLE_AI_EXIT_OPT",         "true")  # ML-driven stop/tp optimization
 AI_REFRESH_MINUTES:         int   = _int("AI_REFRESH_MINUTES",          "30")    # how often AI models refresh
 
+# ── Trading hours ─────────────────────────────────────────────────────────────
+MARKET_OPEN_HOUR:  int = _int("MARKET_OPEN_HOUR",  "9")
+MARKET_OPEN_MIN:   int = _int("MARKET_OPEN_MIN",   "35")   # 09:35 ET — 5 min warmup after open
+MARKET_CLOSE_HOUR: int = _int("MARKET_CLOSE_HOUR", "15")
+MARKET_CLOSE_MIN:  int = _int("MARKET_CLOSE_MIN",  "55")   # 15:55 ET — 5 min cooldown before close
+EQUITY_STRATEGY_INTERVAL_MIN: int = _int("EQUITY_STRATEGY_INTERVAL_MIN", "3")   # was 5 — faster adaptation
+CRYPTO_STRATEGY_INTERVAL_MIN: int = _int("CRYPTO_STRATEGY_INTERVAL_MIN", "5")   # 24/7 crypto scan interval
+EXIT_CHECK_INTERVAL_MIN: int     = _int("EXIT_CHECK_INTERVAL_MIN",     "2")   # exit check frequency
+
 # ── Thematic universe (23 equity symbols, focused & high-quality) ───────────
 AI_TECH: List[str] = [
     "NVDA", "MSFT", "AAPL", "META", "AMZN", "GOOGL",

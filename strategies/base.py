@@ -34,7 +34,12 @@ class Signal:
 
     @property
     def stop_distance(self) -> float:
-        return abs(self.price - self.stop_price)
+        dist = abs(self.price - self.stop_price)
+        # Guard against zero stop distance (stop price equals entry price)
+        if dist <= 0:
+            # Fall back to 1% of price as minimum stop distance
+            return self.price * 0.01 if self.price > 0 else 0.0
+        return dist
 
     def __repr__(self) -> str:
         return (
@@ -54,6 +59,11 @@ class BaseStrategy(ABC):
 
     def __init__(self) -> None:
         self._enabled: bool = True
+        self._ai_exit_optimizer = None  # injected by TradingEngine
+
+    def attach_exit_optimizer(self, optimizer) -> None:
+        """Called by TradingEngine to inject the AI exit optimizer."""
+        self._ai_exit_optimizer = optimizer
 
     @property
     def enabled(self) -> bool:

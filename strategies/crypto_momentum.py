@@ -18,6 +18,7 @@ Exit:   RSI < 40   OR   close < SMA(20)   OR   profit-take at +8%
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Dict, List
 
@@ -107,10 +108,11 @@ class CryptoMomentum(BaseStrategy):
         if cur_adx < self.ADX_MIN:
             log.info("{} SKIP — ADX {:.1f} < {:.0f} (no trend)", sym, cur_adx, self.ADX_MIN)
             return None
-        if cur_atr <= 0:
+        if cur_atr <= 0 or not math.isfinite(cur_atr):
             return None
 
         # 24h return check — only enter when momentum is real
+        ret_24h = 0.0
         if len(close) >= self.MOM_LOOKBACK:
             ret_24h = (cur_close / float(close.iloc[-self.MOM_LOOKBACK]) - 1)
             if ret_24h < self.MOM_MIN:
@@ -120,9 +122,8 @@ class CryptoMomentum(BaseStrategy):
         # Strength: based on RSI momentum, ADX trend strength, and 24h return
         strength = min(1.0, 0.4 + (cur_rsi - self.RSI_ENTRY) / 60.0 + (cur_adx - self.ADX_MIN) / 80.0)
 
-        # Reward strong 24h returns
+        # Reward strong 24h returns (capped at 1.3x)
         if len(close) >= self.MOM_LOOKBACK:
-            ret_24h = (cur_close / float(close.iloc[-self.MOM_LOOKBACK]) - 1)
             strength *= min(1.3, 1.0 + ret_24h * 3)
 
         # Weekend / overnight bonus
@@ -184,8 +185,14 @@ class CryptoMomentum(BaseStrategy):
             if float(adx.iloc[-1]) < self.ADX_EXIT:
                 log.info("{} EXIT — ADX {:.1f} < {} (trend dying)", symbol, float(adx.iloc[-1]), self.ADX_EXIT)
                 return True
-            # Hard stop
-            if cur < entry_price - config.ATR_STOP_MULT * float(atr.iloc[-1]):
+            # ATR-based hard stop (use AI exit optimizer's stop multiplier if available)
+            stop_mult = 2.0
+            if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+                try:
+                    stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+                except Exception:
+                    pass
+            if cur < entry_price - stop_mult * float(atr.iloc[-1]):
                 log.info("{} EXIT — stop loss hit", symbol)
                 return True
         except Exception as e:

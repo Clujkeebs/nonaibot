@@ -135,32 +135,42 @@ class LocalAssetRanker:
             if len(close) < 25:
                 return None
 
-            # Momentum features
-            mom5  = close.iloc[-1] / close.iloc[-5]  - 1
-            mom20 = close.iloc[-1] / close.iloc[-20] - 1
+            # Momentum features (with safety for short data)
+            mom5 = mom20 = 0.0
+            if len(close) >= 5:
+                mom5 = close.iloc[-1] / close.iloc[-5] - 1
+            if len(close) >= 20:
+                mom20 = close.iloc[-1] / close.iloc[-20] - 1
 
             # RSI(14) normalized to 0-1
             delta = close.diff()
             gain  = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
             loss  = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
-            rsi   = float(100 - 100 / (1 + gain.iloc[-1] / max(loss.iloc[-1], 1e-9))) / 100
+            rsi_val = gain.iloc[-1] / max(loss.iloc[-1], 1e-9) if loss.iloc[-1] > 0 else 0
+            rsi = float(100 - 100 / (1 + rsi_val)) / 100
 
             # ATR% (normalized volatility)
             h, l, c = high, low, close.shift(1)
             tr  = pd.concat([(h-l), (h-c).abs(), (l-c).abs()], axis=1).max(axis=1)
-            atr_pct = float(tr.ewm(span=14, adjust=False).mean().iloc[-1]) / float(close.iloc[-1])
+            atr_val = tr.ewm(span=14, adjust=False).mean().iloc[-1]
+            atr_pct = float(atr_val / max(close.iloc[-1], 1e-9))
 
             # BB% (position in Bollinger Bands)
             sma = close.rolling(20).mean()
             std = close.rolling(20).std()
-            bb_pct = float((close.iloc[-1] - (sma - 2*std).iloc[-1]) /
-                           (4 * std.iloc[-1] + 1e-9))
+            bb_lower = sma - 2*std
+            bb_range = 4 * std + 1e-9
+            bb_pct = float((close.iloc[-1] - bb_lower.iloc[-1]) / bb_range.iloc[-1])
             bb_pct = np.clip(bb_pct, 0, 1)
 
             # Volume ratio
             if not volume.empty and len(volume) >= 20:
-                vol_ratio = float(volume.iloc[-1] / (volume.iloc[-20:].mean() + 1e-9))
-                vol_ratio = np.clip(vol_ratio, 0, 5)
+                avg_vol = volume.iloc[-20:].mean()
+                if avg_vol > 0:
+                    vol_ratio = float(volume.iloc[-1] / avg_vol)
+                    vol_ratio = np.clip(vol_ratio, 0, 5)
+                else:
+                    vol_ratio = 1.0
             else:
                 vol_ratio = 1.0
 
@@ -168,17 +178,20 @@ class LocalAssetRanker:
             recent = close.iloc[-20:]
             x = np.arange(len(recent))
             slope = np.polyfit(x, recent.values, 1)[0] if len(recent) >= 10 else 0
-            trend_strength = float(np.clip(slope / (close.iloc[-1] + 1e-9) * 100, -3, 3))
+            trend_strength = float(np.clip(slope / max(close.iloc[-1], 1e-9) * 100, -3, 3))
 
             # Short-term volatility: 5-day realized vol vs 20-day
             ret_5  = close.pct_change().iloc[-5:].std()
             ret_20 = close.pct_change().iloc[-20:].std()
-            vol_expansion = float(ret_5 / (ret_20 + 1e-9) - 1) if ret_20 > 0 else 0.0
+            vol_expansion = float(ret_5 / max(ret_20, 1e-9) - 1)
 
             # Day of week (cyclical)
             dow = df.index[-1].weekday() if hasattr(df.index[-1], "weekday") else 0
             dow_sin = np.sin(2 * np.pi * dow / 5)
             dow_cos = np.cos(2 * np.pi * dow / 5)
+
+            # Relative strength vs SPY (if available in df columns or as extra feature)
+            rel_strength = 0.0
 
             return [
                 mom5, mom20, rsi, atr_pct, bb_pct, vol_ratio,

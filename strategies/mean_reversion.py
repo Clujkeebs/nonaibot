@@ -12,6 +12,7 @@ Best on: liquid large-caps, ETFs. Not used for highly volatile single-asset cryp
 """
 from __future__ import annotations
 
+import math
 from typing import Dict, List
 
 import pandas as pd
@@ -78,7 +79,13 @@ class MeanReversion(BaseStrategy):
             return None
         if cur_adx > self.ADX_MAX:
             return None  # in a real downtrend — skip
-        if cur_atr <= 0:
+        if cur_atr <= 0 or not math.isfinite(cur_atr):
+            return None
+
+        # Tighten entry: require RSI to be sufficiently oversold (below 35)
+        # RSI between 35-40 is weak oversold, often just a pullback
+        if cur_rsi > 35.0:
+            log.debug("{} mean_rev SKIP — RSI {:.1f} not oversold enough", sym, cur_rsi)
             return None
 
         # Strength inversely proportional to how far below lower BB
@@ -87,7 +94,11 @@ class MeanReversion(BaseStrategy):
         strength *= _universe.priority_for_symbol(sym)
         strength  = min(1.0, strength)
 
-        stop = cur_close - self.STOP_MULT * cur_atr
+        # Stop at ATR-based distance (use AI exit optimizer's stop multiplier if available)
+        stop_mult = 2.0
+        if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+            stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+        stop = cur_close - stop_mult * cur_atr
 
         return Signal(
             symbol=sym,
@@ -128,8 +139,14 @@ class MeanReversion(BaseStrategy):
             # RSI recovered
             if rsi.iloc[-1] > 55:
                 return True
-            # Hard stop
-            if cur < entry_price - self.STOP_MULT * atr.iloc[-1]:
+            # ATR-based hard stop (use AI exit optimizer's stop multiplier if available)
+            stop_mult = 2.0
+            if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT:
+                try:
+                    stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+                except Exception:
+                    pass
+            if atr.iloc[-1] > 0 and cur < entry_price - stop_mult * atr.iloc[-1]:
                 return True
         except Exception as e:
             log.warning("MeanReversion.check_exit({}) error: {}", symbol, e)

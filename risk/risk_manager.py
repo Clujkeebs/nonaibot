@@ -62,22 +62,38 @@ class RiskManager:
             return self._approve_crypto(signal, portfolio_value, buying_power, open_positions, ai_size_mult)
 
         # ── Equity: full ATR-based sizing ─────────────────────────────────────
+        # Guard against zero/NaN ATR from illiquid or data-poor symbols
         if signal.atr <= 0 or not math.isfinite(signal.atr):
             log.warning("REJECT {}: bad atr={}", signal.symbol, signal.atr)
             return False, "invalid atr", 0.0
 
+        # Guard against zero/NaN stop distance (price equals stop price)
         if signal.stop_distance <= 0 or not math.isfinite(signal.stop_distance):
             log.warning("REJECT {}: bad stop_distance={}", signal.symbol, signal.stop_distance)
             return False, "invalid stop distance", 0.0
+
+        # Guard against nonsensical price (negative or too low)
+        if signal.price <= 0 or signal.price < signal.atr:
+            log.warning("REJECT {}: price {} < atr {} — likely bad data", signal.symbol, signal.price, signal.atr)
+            return False, "invalid price vs atr", 0.0
 
         regime_weight = self._regime.strategy_weight(signal.strategy)
         pos_scale     = self._regime.max_position_scale()
 
         dollar_risk    = portfolio_value * config.RISK_PER_TRADE_PCT * regime_weight
-        qty_by_risk    = dollar_risk / signal.stop_distance
+        qty_by_risk    = dollar_risk / signal.stop_distance if signal.stop_distance > 0 else 0
         max_dollars    = portfolio_value * config.MAX_POSITION_PCT * pos_scale
-        qty_by_max_pos = max_dollars / signal.price
+        qty_by_max_pos = max_dollars / signal.price if signal.price > 0 else 0
         raw_qty        = min(qty_by_risk, qty_by_max_pos)
+
+        # Enforce absolute minimum ATR-based stop (at least 1% stop distance)
+        min_stop_distance = signal.price * 0.01
+        if signal.stop_distance < min_stop_distance:
+            # Adjust qty to risk only 1% instead of ATR-based stop
+            qty_by_min_stop = dollar_risk / min_stop_distance if min_stop_distance > 0 else 0
+            raw_qty = min(raw_qty, qty_by_min_stop)
+            log.info("{} stop_distance {} < 1% minimum — using {:.1%} stop instead",
+                     signal.symbol, signal.stop_distance, 0.01)
 
         # AI position sizer adjustment (0.5–1.5× multiplier from trade outcomes)
         if ai_size_mult != 1.0:
@@ -143,7 +159,7 @@ class RiskManager:
             return False, "portfolio heat limit reached", 0.0
 
         # ── Correlation cap: prevent over-concentration in correlated names ───
-        correlated_themes = {"ai_tech", "crypto_equity"}
+        correlated_themes = {"ai_tech", "crypto_equity", "growth_etf"}
         signal_theme = _universe.theme_for_symbol(signal.symbol)
         if signal_theme in correlated_themes:
             corr_exp = sum(
@@ -158,9 +174,7 @@ class RiskManager:
                 return False, "correlated exposure limit", 0.0
 
         log.info("APPROVED equity {} qty={} notional={:.2f}", signal.symbol, qty, notional)
-        return True, "approved", float(qty)
-
-    # ── Crypto fast-path ──────────────────────────────────────────────────────
+        return True, "approved", float(qty)        # ── Crypto fast-path ──────────────────────────────────────────────────────
 
     def _approve_crypto(
         self,
@@ -171,44 +185,54 @@ class RiskManager:
         ai_size_mult: float = 1.0,
     ) -> Tuple[bool, str, float]:
         """
-        Crypto flat-dollar sizing. No per-crypto allocation cap —
-        the overall portfolio heat limit is the only ceiling.
-        Target: 3.5% of portfolio per trade.
-        Floor: MIN_NOTIONAL_CRYPTO ($25). Cap: $6000.
+        Crypto ATR-based sizing (upgraded from flat-dollar).
+        Uses ATR stop distance to size positions with 1.5% risk per trade.
+        Cap: $5000 per position, 5% of portfolio.
         """
-        target = max(config.MIN_NOTIONAL_CRYPTO, min(portfolio_value * 0.035, 6000.0))
+        # Use ATR-based sizing when ATR is valid
+        if signal.atr > 0 and math.isfinite(signal.atr) and signal.price > 0:
+            dollar_risk = portfolio_value * config.RISK_PER_TRADE_PCT
+            stop_distance = config.ATR_STOP_MULT * signal.atr
+            qty_by_risk = dollar_risk / stop_distance if stop_distance > 0 else 0
+            max_cap = min(portfolio_value * 0.05, 5000.0)
+            qty = round(min(qty_by_risk, max_cap / signal.price), 4)
+        else:
+            # Fallback to flat-dollar sizing for illiquid symbols
+            target = max(config.MIN_NOTIONAL_CRYPTO, min(portfolio_value * 0.035, 5000.0))
+            qty = round(target / signal.price, 4)
 
         # AI position sizer adjustment
         if ai_size_mult != 1.0:
-            target *= ai_size_mult
-            target = min(target, portfolio_value * 0.05)  # cap at 5% after AI scaling
+            qty *= ai_size_mult
+            max_cap = min(portfolio_value * 0.05, 5000.0)
+            qty = min(qty, max_cap / signal.price)
             log.debug("AI size mult {:.2f}x applied to crypto {}", ai_size_mult, signal.symbol)
 
         # If buying power is tight, scale down rather than reject outright.
-        if target > buying_power * 0.95:
+        notional = qty * signal.price
+        if notional > buying_power * 0.95:
             scaled = buying_power * 0.95
             if scaled < config.MIN_NOTIONAL_CRYPTO:
                 log.warning("REJECT {}: buying power {:.2f} < min {}",
                             signal.symbol, buying_power, config.MIN_NOTIONAL_CRYPTO)
                 return False, "insufficient buying power", 0.0
-            log.info("Scaling {} target {:.2f} → {:.2f} (BP-limited)",
-                     signal.symbol, target, scaled)
-            target = scaled
+            qty = round(scaled / signal.price, 4)
+            notional = qty * signal.price
+            log.info("Scaling {} notional {:.2f} → {:.2f} (BP-limited)",
+                     signal.symbol, qty * signal.price, notional)
 
         total_exp = sum(p.get("market_value", 0) for p in open_positions.values())
-        if (total_exp + target) / portfolio_value > config.PORTFOLIO_HEAT_MAX:
+        if (total_exp + notional) / portfolio_value > config.PORTFOLIO_HEAT_MAX:
             log.warning("REJECT {}: portfolio heat {:.1%} would exceed {:.1%}",
                         signal.symbol,
-                        (total_exp + target) / portfolio_value,
+                        (total_exp + notional) / portfolio_value,
                         config.PORTFOLIO_HEAT_MAX)
             return False, "portfolio heat limit", 0.0
 
-        qty = round(target / signal.price, 4)
         if qty <= 0:
             log.warning("REJECT {}: qty=0 price={}", signal.symbol, signal.price)
             return False, "qty <= 0", 0.0
 
-        notional = qty * signal.price
         log.info("APPROVED crypto {} qty={} notional={:.2f} heat={:.1%}",
                  signal.symbol, qty, notional,
                  (total_exp + notional) / portfolio_value)

@@ -1,32 +1,90 @@
-Alpaca Algo-Trader
-A high-performance, logic-based automated trading engine for the Alpaca Markets API.
+# NoAiBot — 24/7 Algorithmic Trading Bot
 
-This repository provides a robust framework for systematic trading without the "black box" complexity of AI. By focusing on proven technical indicators and strict execution logic, this bot offers transparency, speed, and full control over your financial strategies.
+A high-performance, AI-enhanced automated trading engine for Alpaca Markets. Trades equities and crypto around the clock with intelligent risk management, free local AI improvements, and multi-strategy execution.
 
-Key Features
-Pure Algorithmic Execution: No unpredictable AI models—just clean, mathematical trading signals.
+## Features
 
-Alpaca Native: Optimized for the Alpaca Trade API for seamless equity and crypto execution.
+### Multi-Strategy Trading
+- **Trend Following** — Dual EMA crossover + ADX trend filter
+- **Mean Reversion** — Bollinger Band + RSI oversold filter
+- **Volatility Breakout** — Keltner Channel expansion strategy
+- **Sector Rotation** — Weekly thematic momentum scoring
+- **Crypto Momentum** — 24/7 hourly RSI/SMA trend strategy
+- **Opening Range Breakout** — Intraday 30-min range breakout (equities)
 
-Paper Trading Ready: Test your strategies in a real-time simulated environment before ever risking capital.
+### Free Local AI Layer (No External APIs)
+- **Asset Ranker** — sklearn GBM predicts next-bar returns from price features
+- **Regime Detector** — HMM identifies bull/bear/transition market states
+- **Position Sizer** — Adaptive sizing based on strategy+regime performance
+- **Strategy Allocator** — Dynamic weight allocation toward hot strategies
+- **Exit Optimizer** — Learns optimal stop/take-profit from trade history
+- **Technical Scorecard** — Composite 0-100 score from RSI/MACD/BB/volume/trend
+- **Sentiment Analyzer** — Keyword + TF-IDF classifier for news headlines
 
-Lightweight & Fast: Minimal overhead for low-latency order execution.
+### Risk Management
+- ATR-based adaptive stops (not fixed %)
+- Trailing stops with volatility-adjusted giveback
+- Correlation caps (AI tech + crypto equities grouped)
+- Sector exposure limits
+- Circuit breakers (daily/weekly loss limits)
+- Cooldown after stop-outs to prevent re-buying falling knives
 
-Quick Start
-Get Your Keys: Sign up at Alpaca Markets and generate your API Key ID and Secret Key.
+### Execution
+- Paper trading by default (ALPACA_PAPER=true)
+- Market orders for equities, limit orders for crypto buys
+- Auto-retry with fill verification
+- Fractional shares support
 
-Configure: Add your credentials to the .env file (see .env.example).
+## Quick Start
 
-Run: Launch the bot to start paper trading immediately.
+```bash
+# 1. Clone
+git clone https://github.com/noaibot/noaibot.git
+cd noaibot
 
-Bash
+# 2. Install dependencies
+pip install -r requirements.txt
 
-# Example start command (adjust based on your main file)
+# 3. Configure
+cp .env.example .env
+# Edit .env with your Alpaca API keys
+
+# 4. Run
 python main.py
-Why Non-AI?
-While AI is flashy, systematic trading relies on consistency and backtesting. This bot is built for traders who want to know exactly why a trade was placed, allowing for precise fine-tuning of entry and exit parameters.
+```
 
-Contributing & Support
-Contributions are welcome! If you find a bug or have a feature request, feel free to open an issue or submit a pull request.
+## Environment Variables
 
-Disclaimer: Trading stocks and digital assets involves significant risk. This bot is for educational purposes. Use at your own risk.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ALPACA_API_KEY` | required | Alpaca API key |
+| `ALPACA_SECRET_KEY` | required | Alpaca secret key |
+| `ALPACA_PAPER` | `true` | Paper trading mode |
+| `ENABLE_AI_LAYER` | `true` | Enable local AI components |
+| `ENABLE_AI_POSITION_SIZER` | `true` | Adaptive position sizing |
+| `ENABLE_AI_STRATEGY_ALLOC` | `true` | Dynamic strategy weights |
+| `ENABLE_AI_EXIT_OPT` | `true` | ML-driven exit optimization |
+| `MAX_POSITION_PCT` | `0.08` | Max 8% per symbol |
+| `RISK_PER_TRADE_PCT` | `0.015` | 1.5% risk per trade |
+| `DAILY_LOSS_LIMIT_PCT` | `0.02` | 2% daily halt |
+| `SLACK_WEBHOOK_URL` | `` | Slack alerts (optional) |
+
+## Architecture
+
+```
+main.py              → Entry point, graceful shutdown
+engine.py            → Trading engine, signal execution, exit logic
+config.py            → All environment configuration
+strategies/          → 6 strategy implementations
+risk/                → RiskManager, CircuitBreaker
+execution/           → OrderEngine with retry logic
+portfolio/           → PortfolioTracker, P&L calculation
+data/                → MarketDataClient, Universe
+ai/                  → 7 free AI modules (all local, no external APIs)
+scheduler/           → TaskManager (APScheduler jobs)
+utils/               → Logging, alerts
+```
+
+## Disclaimer
+
+Trading stocks and digital assets involves significant risk. This bot is for educational and informational purposes only. Use at your own risk. Past performance does not guarantee future results.

@@ -15,6 +15,7 @@ by ensuring the portfolio is always tilted toward the best-performing themes.
 """
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Tuple
 
 import pandas as pd
@@ -68,9 +69,11 @@ class SectorRotation(BaseStrategy):
                 df = theme_bars[theme].get(sym)
                 if df is None or not self._enough_bars(df, 25):
                     continue
-                atr = self._atr(df).iloc[-1]
+                atr = self._atr(df, 14).iloc[-1]
+                if atr <= 0 or not math.isfinite(atr):
+                    continue
                 cur_price = df["close"].iloc[-1]
-                stop = cur_price - config.ATR_STOP_MULT * atr
+                stop = cur_price - 2.0 * atr  # 2× ATR stop for sector rotation
 
                 signals.append(Signal(
                     symbol=sym,
@@ -96,7 +99,9 @@ class SectorRotation(BaseStrategy):
                 if not self._enough_bars(df, 5):
                     continue
                 cur_price = df["close"].iloc[-1]
-                atr = self._atr(df).iloc[-1]
+                atr = self._atr(df, 14).iloc[-1]
+                if atr <= 0 or not math.isfinite(atr):
+                    atr = cur_price * 0.02  # fallback: 2% of price as ATR
                 signals.append(Signal(
                     symbol=sym,
                     side="sell",

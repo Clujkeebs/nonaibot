@@ -27,6 +27,7 @@ Bars: 1-minute bars for current day + 5 days history
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, time as dtime
 from typing import Dict, List, Optional
 

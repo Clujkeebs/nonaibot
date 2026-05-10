@@ -56,7 +56,10 @@ class AIPositionSizer:
         if key in self._cache:
             return self._cache[key]
 
-        return 1.0
+        # Compute on-demand if cache miss (don't wait for refresh cycle)
+        mult = self._compute_multiplier(strategy, regime)
+        self._cache[key] = mult
+        return mult
 
     def refresh(self, strategies: List[str], regime: str) -> None:
         """
@@ -88,13 +91,23 @@ class AIPositionSizer:
         if not trades or len(trades) < _MIN_TRADES:
             return 1.0
 
-        # Filter to trades matching this regime (fuzzy match)
+        # Normalize regime for comparison (handle both enum string and plain string)
+        regime_lower = regime.lower().replace('"', '')
+
+        # Filter to trades matching this regime (exact match on stored regime string)
         regime_trades = [
             t for t in trades
-            if t.get("regime", "").lower() == regime.lower()
+            if t.get("regime", "").lower() == regime_lower
         ]
         if len(regime_trades) < _MIN_TRADES:
-            # Use all trades for this strategy as fallback
+            # Fall back: match regime prefix (e.g., "bull" matches "bull_low_vol")
+            if regime_lower in ("bull", "bear", "transition", "unknown"):
+                regime_trades = [
+                    t for t in trades
+                    if t.get("regime", "").lower().startswith(regime_lower)
+                ]
+        if len(regime_trades) < _MIN_TRADES:
+            # Use all trades for this strategy as final fallback
             regime_trades = trades
 
         if len(regime_trades) < _MIN_TRADES:

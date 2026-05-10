@@ -15,6 +15,7 @@ This strategy fires in both trending AND range-breaking scenarios.
 """
 from __future__ import annotations
 
+import math
 from typing import Dict, List
 
 import pandas as pd
@@ -74,7 +75,7 @@ class VolatilityBreakout(BaseStrategy):
 
         if cur_close <= keltner_upper:
             return None
-        if cur_avg_atr <= 0:
+        if cur_avg_atr <= 0 or not math.isfinite(cur_avg_atr):
             return None
         if cur_atr < self.VOL_EXPAND * cur_avg_atr:
             return None   # vol not expanding — likely noise
@@ -87,6 +88,11 @@ class VolatilityBreakout(BaseStrategy):
             if avg_vol > 0 and volume.iloc[-1] < self.VOL_RATIO * avg_vol:
                 return None
 
+        # Require price to be above 20-day SMA (trend confirmation)
+        ema20_val = ema20.iloc[-1]
+        if cur_close < ema20_val:
+            return None  # no business being in a breakout below trend
+
         # Previous bar must NOT have already been above upper channel
         prev_close = close.iloc[-2]
         prev_upper = ema20.iloc[-2] + self.ATR_MULT * atr.iloc[-2]
@@ -97,7 +103,11 @@ class VolatilityBreakout(BaseStrategy):
         strength *= _universe.priority_for_symbol(sym)
         strength  = min(1.0, strength)
 
-        stop = cur_close - self.STOP_MULT * cur_atr
+        # Stop at ATR-based distance (use AI exit optimizer's stop multiplier if available)
+        stop_mult = 2.0
+        if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+            stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+        stop = cur_close - stop_mult * cur_atr
 
         return Signal(
             symbol=sym,
@@ -134,9 +144,16 @@ class VolatilityBreakout(BaseStrategy):
 
             if cur < ema20.iloc[-1]:
                 return True
-            trail_stop = close.rolling(len(close)).max().iloc[-1] - self.STOP_MULT * atr.iloc[-1]
-            if cur < trail_stop:
-                return True
+            # ATR-based exit
+            if atr.iloc[-1] > 0:
+                stop_mult = 2.0
+                if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT:
+                    try:
+                        stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+                    except Exception:
+                        pass
+                if cur < entry_price - stop_mult * atr.iloc[-1]:
+                    return True
         except Exception as e:
             log.warning("VolatilityBreakout.check_exit({}) error: {}", symbol, e)
         return False

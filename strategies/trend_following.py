@@ -85,6 +85,10 @@ class TrendFollowing(BaseStrategy):
         if not (fresh_cross or continuation):
             return None
 
+        # Require momentum: price must be above EMA21 for continuation trades too
+        if cur_price < cur_slow:
+            return None
+
         # Volume bonus on fresh crossovers (no longer a hard filter — too restrictive
         # on slow days). We just reward high-volume breakouts with a strength boost.
         vol_boost = 1.0
@@ -102,7 +106,11 @@ class TrendFollowing(BaseStrategy):
         strength *= _universe.priority_for_symbol(sym) * vol_boost
         strength  = min(1.0, strength)
 
-        stop = cur_price - config.ATR_STOP_MULT * cur_atr
+        # Use AI exit optimizer's stop multiplier for adaptive stops
+        stop_mult = 2.0
+        if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+            stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+        stop = cur_price - stop_mult * cur_atr
 
         return Signal(
             symbol=sym,
@@ -141,10 +149,17 @@ class TrendFollowing(BaseStrategy):
             if ema_fast.iloc[-1] < ema_slow.iloc[-1]:
                 return True
 
-            # Trailing stop: 2× ATR below the highest close since entry
-            trail_stop = close.rolling(len(close)).max().iloc[-1] - config.ATR_STOP_MULT * atr.iloc[-1]
-            if cur_price < trail_stop:
-                return True
+            # ATR-based trailing stop
+            if atr.iloc[-1] > 0:
+                stop_mult = 2.0
+                if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT:
+                    try:
+                        stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+                    except Exception:
+                        pass
+                trail_stop = close.rolling(len(close)).max().iloc[-1] - stop_mult * atr.iloc[-1]
+                if cur_price < trail_stop:
+                    return True
         except Exception as e:
             log.warning("TrendFollowing.check_exit({}) error: {}", symbol, e)
         return False
