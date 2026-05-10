@@ -97,14 +97,21 @@ class TradingEngine:
         self._position_strategy: Dict[str, str] = {}
         # Track high-water marks for trailing stops: symbol → highest seen close
         self._position_high: Dict[str, float] = {}
-        # Track position entry times for time-based exits
+        # Track position entry times for time-based exits (persisted to DB)
         self._position_opened: Dict[str, datetime] = {}
+        # ORB same-day re-entry guard: track ORB symbols traded today
+        self._orb_traded_today: set = set()
         # Cooldown after stop-outs: symbol → datetime when re-entry is allowed.
         # Persisted to SQLite so it survives Railway redeploys (otherwise the
         # bot would re-buy stopped-out symbols on every push).
         self._cooldown_until: Dict[str, datetime] = {}
         self._init_cooldown_table()
         self._load_cooldowns()
+
+        # Position entry times: persisted to survive restarts so time-stop
+        # tracking isn't reset on every deploy.
+        self._init_position_age_table()
+        self._load_position_ages()
         self._seed_position_strategies()
         # VIX data for dynamic risk scaling
         self._vix_level: float = 20.0  # default neutral VIX
@@ -366,6 +373,16 @@ class TradingEngine:
                 if exit_reason is None and entry_price > 0:
                     pnl_pct = (new_high - entry_price) / entry_price
                     if pnl_pct >= config.TRAIL_ARM_PCT:
+                        # Scorecard-based exit gating: high score = wider trail (let winners run)
+                        # Low score = tighter trail (exit faster on weak setups)
+                        score_mult = 1.0
+                        if self._ai_scorecard:
+                            sc = self._ai_scorecard.get_score(sym)
+                            if sc >= 70:
+                                score_mult = 1.25  # strong setup — give it more room
+                            elif sc <= 40:
+                                score_mult = 0.80  # weak setup — exit sooner
+
                         # Dynamic trailing stop: use tighter giveback in high-vol environments
                         # Base giveback on ATR as % of price, scaled by current regime
                         if atr > 0 and math.isfinite(atr) and entry_price > 0:
@@ -373,16 +390,21 @@ class TradingEngine:
                             atr_giveback = 2.0 * atr / new_high  # 2× ATR as % of peak
                             # Scale between TRAIL_GIVEBACK_PCT (5%) and 2× ATR giveback
                             trail_pct = min(0.20, max(config.TRAIL_GIVEBACK_PCT, atr_giveback))
+                            # Apply scorecard multiplier (strong setups get wider trails)
+                            trail_pct *= score_mult
+                            trail_pct = min(0.25, trail_pct)  # cap at 25%
                             # Additional VIX scaling: if VIX > 25, widen the trail slightly
                             if self._vix_level > 25:
-                                trail_pct = min(0.25, trail_pct * 1.25)
+                                trail_pct = min(0.30, trail_pct * 1.25)
                         else:
                             trail_pct = config.TRAIL_GIVEBACK_PCT
                         trail_stop = new_high * (1 - trail_pct)
                         if cur_price <= trail_stop:
                             log.warning(
-                                "{} TRAILING STOP — high={:.4f} cur={:.4f} stop={:.4f} (gains locked)",
+                                "{} TRAILING STOP — high={:.4f} cur={:.4f} stop={:.4f} score={:.0f} mult={:.2f}",
                                 sym, new_high, cur_price, trail_stop,
+                                self._ai_scorecard.get_score(sym) if self._ai_scorecard else 50,
+                                score_mult,
                             )
                             exit_reason = "trailing_stop"
 
@@ -420,6 +442,9 @@ class TradingEngine:
                     self._position_strategy.pop(sym, None)
                     self._position_high.pop(sym, None)
                     self._position_opened.pop(sym, None)
+
+                    # Clean up persisted position age and ORB re-entry guard
+                    self._cleanup_position_meta(sym)
 
                     # Set cooldown after STOP exits so we don't re-buy a falling
                     # knife. Strategy exits (RSI fade, EMA cross) don't get
@@ -476,6 +501,8 @@ class TradingEngine:
         log.info("── Daily open tasks ──")
         self._breaker.reset()
         self.update_regime()
+        # Clear ORB same-day re-entry guard for new trading day
+        self._orb_traded_today.clear()
         state = self._portfolio.get_account_state()
         log.info("Account: portfolio=${:.2f} BP=${:.2f}", state["portfolio_value"], state["buying_power"])
 
@@ -714,6 +741,11 @@ class TradingEngine:
 
             # Cooldown check — skip buys for symbols recently stopped out
             if sig.side == "buy":
+                # ORB same-day re-entry guard: don't re-buy same symbol after ORB today
+                if sig.strategy == "opening_range_breakout" and sym in self._orb_traded_today:
+                    log.info("Signal SKIPPED ({} {}) — ORB re-entry guard", sig.strategy, sym)
+                    continue
+
                 cooldown = self._cooldown_until.get(sym)
                 if cooldown and datetime.now(ET) < cooldown:
                     log.info("Signal SKIPPED ({}) — cooldown until {}",
@@ -829,6 +861,12 @@ class TradingEngine:
             if success:
                 self._position_strategy[sym] = sig.strategy
                 self._position_opened[sym] = datetime.now(ET)
+                self._save_position_age(sym, datetime.now(ET))
+
+                # ORB same-day re-entry guard: prevent the bot from repeatedly
+                # chasing the same symbol via ORB after an existing ORB position.
+                if sig.strategy == "opening_range_breakout":
+                    self._orb_traded_today.add(sym)
                 # Log entry to AI trade journal
                 try:
                     self._ai_journal.log_entry(
@@ -893,6 +931,56 @@ class TradingEngine:
         except Exception as e:
             log.warning("_init_cooldown_table error: {}", e)
 
+    def _init_position_age_table(self) -> None:
+        """Create table to persist position entry times across restarts."""
+        try:
+            import sqlite3
+            with sqlite3.connect(config.DB_PATH) as c:
+                c.execute("""
+                    CREATE TABLE IF NOT EXISTS position_ages (
+                        symbol     TEXT PRIMARY KEY,
+                        opened_iso TEXT NOT NULL
+                    )
+                """)
+        except Exception as e:
+            log.warning("_init_position_age_table error: {}", e)
+
+    def _load_position_ages(self) -> None:
+        """Restore position entry times from DB so time-stop tracking survives restarts."""
+        try:
+            import sqlite3
+            now = datetime.now(ET)
+            with sqlite3.connect(config.DB_PATH) as c:
+                c.row_factory = sqlite3.Row
+                rows = c.execute("SELECT symbol, opened_iso FROM position_ages").fetchall()
+                for row in rows:
+                    try:
+                        opened = datetime.fromisoformat(row["opened_iso"])
+                        # Only restore if the position still exists in portfolio
+                        if self._portfolio.get_open_positions().get(row["symbol"]):
+                            self._position_opened[row["symbol"]] = opened
+                        else:
+                            # Position no longer exists — clean up stale entry
+                            c.execute("DELETE FROM position_ages WHERE symbol=?", (row["symbol"],))
+                    except Exception:
+                        pass
+            if self._position_opened:
+                log.info("Restored {} position ages from DB", len(self._position_opened))
+        except Exception as e:
+            log.warning("_load_position_ages error: {}", e)
+
+    def _save_position_age(self, symbol: str, opened: datetime) -> None:
+        """Persist position entry time to DB."""
+        try:
+            import sqlite3
+            with sqlite3.connect(config.DB_PATH) as c:
+                c.execute("""
+                    INSERT OR REPLACE INTO position_ages (symbol, opened_iso)
+                    VALUES (?, ?)
+                """, (symbol, opened.isoformat()))
+        except Exception as e:
+            log.warning("_save_position_age error: {}", e)
+
     def _load_cooldowns(self) -> None:
         try:
             import sqlite3
@@ -913,6 +1001,17 @@ class TradingEngine:
                 log.info("Loaded {} active cooldowns from DB", len(self._cooldown_until))
         except Exception as e:
             log.warning("_load_cooldowns error: {}", e)
+
+    def _cleanup_position_meta(self, symbol: str) -> None:
+        """Clean up all position metadata on exit — position age, ORB guard."""
+        try:
+            import sqlite3
+            with sqlite3.connect(config.DB_PATH) as c:
+                c.execute("DELETE FROM position_ages WHERE symbol=?", (symbol,))
+        except Exception:
+            pass
+        self._position_opened.pop(symbol, None)
+        self._orb_traded_today.discard(symbol)
 
     def _save_cooldown(self, symbol: str, until: datetime, reason: str) -> None:
         try:

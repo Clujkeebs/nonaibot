@@ -73,7 +73,11 @@ class SectorRotation(BaseStrategy):
                 if atr <= 0 or not math.isfinite(atr):
                     continue
                 cur_price = df["close"].iloc[-1]
-                stop = cur_price - 2.0 * atr  # 2× ATR stop for sector rotation
+                # Use AI exit optimizer's stop multiplier for adaptive stops
+                stop_mult = 2.0
+                if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+                    stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+                stop = cur_price - stop_mult * atr
 
                 signals.append(Signal(
                     symbol=sym,
@@ -185,11 +189,17 @@ class SectorRotation(BaseStrategy):
                 log.info("{} sector_rotation EXIT — price below SMA20", symbol)
                 return True
 
-            # ATR stop
+            # ATR stop (use AI exit optimizer's adaptive stop multiplier)
             if entry_price > 0 and not pd.isna(atr.iloc[-1]):
-                stop_price = entry_price - 2.0 * float(atr.iloc[-1])
+                stop_mult = 2.0
+                if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT:
+                    try:
+                        stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+                    except Exception:
+                        pass
+                stop_price = entry_price - stop_mult * float(atr.iloc[-1])
                 if cur < stop_price:
-                    log.info("{} sector_rotation EXIT — ATR stop", symbol)
+                    log.info("{} sector_rotation EXIT — ATR stop mult={:.1f}", symbol, stop_mult)
                     return True
         except Exception as e:
             log.warning("SectorRotation.check_exit({}) error: {}", symbol, e)
