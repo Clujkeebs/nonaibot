@@ -122,6 +122,16 @@ class TaskManager:
             max_instances=1,
         )
 
+        # ── Intraday sector rotation check (every 15 min during market hours) ──
+        self._scheduler.add_job(
+            self._safe(e.run_intraday_sector_rotation),
+            IntervalTrigger(minutes=15, timezone=ET),
+            id="intraday_sector_rotation",
+            name="Intraday Sector Rotation",
+            max_instances=1,
+            coalesce=True,
+        )
+
         # ── Daily open tasks (market open prep) ───────────────────────────────
         self._scheduler.add_job(
             self._safe(e.daily_open),

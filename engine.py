@@ -266,7 +266,7 @@ class TradingEngine:
     def run_sector_rotation(self) -> None:
         if self._breaker.is_halted():
             return
-        log.info("Running weekly sector rotation...")
+        log.info("Running sector rotation...")
         bars = self._data.get_stock_bars(
             self._universe.equities,
             timeframe=TimeFrame.Day,
@@ -277,6 +277,56 @@ class TradingEngine:
         rotation = SectorRotation()
         signals  = rotation.generate_signals(bars)
         self._execute_signals(signals)
+
+    def run_intraday_sector_rotation(self) -> None:
+        """Intraday sector rotation check — runs every 15 min during market hours.
+
+        Uses sector ETFs (SMH, QQQ, SPY) to detect short-term sector leadership
+        changes that the daily strategy might miss. Adds conviction to the
+        regular sector rotation signal if the intraday signal agrees.
+        """
+        if not self._is_market_hours():
+            return
+        if self._breaker.is_halted():
+            return
+        if not config.ENABLE_SECTOR_ROTATION:
+            return
+
+        try:
+            # Use 5-min bars for intraday sector momentum
+            etf_bars = self._data.get_stock_bars(
+                ["SMH", "QQQ", "SPY"],
+                timeframe=TimeFrame.Minute,
+                lookback_days=2,
+            )
+            if len(etf_bars) < 2:
+                return
+
+            # Build momentum scores from last 30 bars (~2.5 hours)
+            etf_momentum: Dict[str, float] = {}
+            for sym, df in etf_bars.items():
+                if len(df) >= 20:
+                    ret = (df["close"].iloc[-1] / df["close"].iloc[-20] - 1) * 100
+                    etf_momentum[sym] = ret
+
+            if not etf_momentum:
+                return
+
+            leader = max(etf_momentum, key=etf_momentum.get)
+            lead_ret = etf_momentum[leader]
+            log.debug("Intraday sector momentum: {} up {:.2f}%", leader, lead_ret)
+
+            # If SMH (semis/AI) is strongly leading (>1.5% over QQQ), boost
+            # trend_following (captures momentum) and volatility_breakout
+            # (captures breakout conviction) for the next cycle.
+            if leader == "SMH" and etf_momentum.get("SMH", 0) - etf_momentum.get("QQQ", 0) > 1.5:
+                log.info("Intraday sector alert: SMH leading by {:.2f}% — boosting momentum strategies",
+                         etf_momentum.get("SMH", 0) - etf_momentum.get("QQQ", 0))
+                self._regime._override_weight("trend_following", 1.15)
+                self._regime._override_weight("volatility_breakout", 1.10)
+
+        except Exception as e:
+            log.warning("run_intraday_sector_rotation error: {}", e)
 
     def check_all_exits(self) -> None:
         positions = self._portfolio.get_open_positions()
@@ -491,6 +541,27 @@ class TradingEngine:
                 state = self._ai_regime.predict(spy) if spy is not None else None
                 if state is not None:
                     log.info("AI regime state: {}", state)
+
+            # Wire AI regime detector into strategy weights — if the AI regime
+            # detector is available, blend its signal with the rule-based regime
+            # filter so strategies adapt to subtle market regime shifts.
+            if config.ENABLE_AI_LAYER and self._ai_regime and self._ai_regime.is_fitted():
+                try:
+                    ai_regime = self._ai_regime.predict(spy) if spy is not None else None
+                    if ai_regime:
+                        # Blend AI regime confidence (0-1) into each strategy's weight
+                        ai_conf = self._ai_regime.regime_confidence() or 0.5
+                        for strat in self._equity_strategies + self._crypto_strategies:
+                            base_w = self._regime.strategy_weight(strat.name)
+                            # If AI regime is "bear" or "uncertain", reduce weight further
+                            if ai_regime in ("bear", "uncertain", "neutral"):
+                                ai_blend = base_w * (1.0 - ai_conf * 0.3)
+                                self._regime._override_weight(strat.name, ai_blend)
+                            elif ai_regime == "bull" and ai_conf > 0.6:
+                                # Strong bull signal — slight additional boost
+                                self._regime._override_weight(strat.name, base_w * 1.05)
+                except Exception:
+                    pass
 
             # Fetch VIX for dynamic risk scaling
             self._update_vix()
@@ -1042,12 +1113,26 @@ class TradingEngine:
             log.warning("_save_cooldown error: {}", e)
 
     def _update_vix(self) -> None:
-        """Fetch VIX level for dynamic risk scaling."""
+        """Fetch VIX level for dynamic risk scaling. Tracks staleness to avoid stale data."""
+        STALE_THRESHOLD_HOURS = 4
         try:
             vix_bars = self._data.get_stock_bars(["VIXY"], TimeFrame.Day, lookback_days=5)
             vix_df = vix_bars.get("VIXY")
             if vix_df is not None and len(vix_df) > 0:
-                self._vix_level = float(vix_df["close"].iloc[-1])
+                vix_val = float(vix_df["close"].iloc[-1])
+                # Check timestamp to detect stale data (market closed / API gap)
+                try:
+                    vix_ts = vix_df.index[-1]
+                    age_h = (datetime.now(ET) - vix_ts.to_pydatetime().replace(tzinfo=ET)).total_seconds() / 3600
+                    if age_h > STALE_THRESHOLD_HOURS:
+                        log.warning(
+                            "VIX data is stale (last bar {} hours old) — using previous level {:.2f}",
+                            round(age_h, 1), self._vix_level,
+                        )
+                        return  # keep previous VIX level
+                except Exception:
+                    pass
+                self._vix_level = vix_val
                 log.debug("VIX level: %.2f", self._vix_level)
             else:
                 # Fallback: derive from SPY realized vol

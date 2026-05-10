@@ -36,6 +36,28 @@ from strategies.base import BaseStrategy
 from utils.logger import log
 
 
+def _validate_config() -> None:
+    """Sanity-check config values at startup — fail fast on bad parameters."""
+    issues: list[str] = []
+    if config.MAX_POSITION_PCT > 0.20:
+        issues.append(f"MAX_POSITION_PCT={config.MAX_POSITION_PCT} is dangerously high (max 0.20)")
+    if config.RISK_PER_TRADE_PCT > 0.03:
+        issues.append(f"RISK_PER_TRADE_PCT={config.RISK_PER_TRADE_PCT} risks blowing up (max 0.03)")
+    if config.HARD_STOP_PCT < 0.01:
+        issues.append(f"HARD_STOP_PCT={config.HARD_STOP_PCT} is too tight — set at least 0.01")
+    if config.COOLDOWN_HOURS_EQUITY < 1:
+        issues.append(f"COOLDOWN_HOURS_EQUITY={config.COOLDOWN_HOURS_EQUITY} is too short — min 1h")
+    if config.MAX_OPEN_POSITIONS < 5:
+        issues.append(f"MAX_OPEN_POSITIONS={config.MAX_OPEN_POSITIONS} is too low — min 5")
+    if issues:
+        for issue in issues:
+            log.error("CONFIG VALIDATION FAILED: {}", issue)
+        raise ValueError(f"Config validation failed: {'; '.join(issues)}")
+
+
+_validate_config()
+
+
 class Regime(str, Enum):
     BULL_LOW_VOL  = "bull_low_vol"
     BULL_HIGH_VOL = "bull_high_vol"
@@ -118,7 +140,17 @@ class RegimeFilter:
         )
 
     def strategy_weight(self, strategy_name: str) -> float:
+        # Check for AI override before returning default weight
+        if hasattr(self, "_ai_weight_override") and strategy_name in self._ai_weight_override:
+            return self._ai_weight_override[strategy_name]
         return getattr(self._weights, strategy_name, 1.0)
+
+    def _override_weight(self, strategy_name: str, weight: float) -> None:
+        """AI-driven override: temporarily adjust a strategy's weight."""
+        if not hasattr(self, "_ai_weight_override"):
+            self._ai_weight_override: Dict[str, float] = {}
+        self._ai_weight_override[strategy_name] = weight
+        log.debug("Regime AI override: {} weight → {:.3f}", strategy_name, weight)
 
     def equity_trading_enabled(self) -> bool:
         return True  # weights reduce size in bad regimes; never hard-block

@@ -206,10 +206,31 @@ class OrderEngine:
                     return True
                 else:
                     log.warning(
-                        "Order {} not filled in {}s — cancelling (attempt {}/{})",
+                        "Order {} not filled in {}s — resubmitting as limit (attempt {}/{})",
                         order_id, config.ORDER_FILL_TIMEOUT, attempt, config.ORDER_RETRY_LIMIT,
                     )
                     self._cancel_order(order_id)
+                    # Retry as limit order at slightly worse price (guaranteed fill attempt)
+                    if attempt < config.ORDER_RETRY_LIMIT:
+                        limit_price = round(price * (1 + config.SLIPPAGE_LIMIT_PCT * 1.5), 2)
+                        retry_req = LimitOrderRequest(
+                            symbol=symbol,
+                            qty=qty,
+                            side=side,
+                            time_in_force=TimeInForce.DAY,
+                            limit_price=limit_price,
+                        )
+                        try:
+                            retry_order = self._client.submit_order(retry_req)
+                            retry_id = str(retry_order.id)
+                            self._persist_order(retry_id, symbol, side, qty, price, strategy)
+                            self._update_order(order_id, "replaced", 0, 0)
+                            if self._wait_for_fill(retry_id, symbol):
+                                alert_trade(symbol, side, qty, price, strategy)
+                                return True
+                            self._cancel_order(retry_id)
+                        except Exception as e2:
+                            log.warning("Limit retry for {} failed: {}", symbol, e2)
 
             except Exception as e:
                 log.error(
@@ -251,12 +272,22 @@ class OrderEngine:
                         time_in_force=TimeInForce.GTC,
                     )
             else:
-                req = MarketOrderRequest(
-                    symbol=symbol,
-                    qty=qty,
-                    side=side,
-                    time_in_force=TimeInForce.DAY if not is_crypto else TimeInForce.GTC,
-                )
+                # For equity BUYs during market hours: try market first, fall back
+                # to limit if the fill times out (avoids missed entries in thin books).
+                if side == OrderSide.BUY and not is_crypto and not force_market:
+                    req = MarketOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=side,
+                        time_in_force=TimeInForce.DAY,
+                    )
+                else:
+                    req = MarketOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=side,
+                        time_in_force=TimeInForce.DAY if not is_crypto else TimeInForce.GTC,
+                    )
 
             order = self._client.submit_order(req)
             log.info(
