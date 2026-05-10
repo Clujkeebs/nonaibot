@@ -31,6 +31,7 @@ from typing import Dict, Optional
 
 import pandas as pd
 
+import config
 from strategies.base import BaseStrategy
 from utils.logger import log
 
@@ -122,7 +123,10 @@ class RegimeFilter:
     def equity_trading_enabled(self) -> bool:
         return True  # weights reduce size in bad regimes; never hard-block
 
-    def max_position_scale(self) -> float:
+    def max_position_scale(
+        self,
+        exit_optimizer=None,
+    ) -> float:
         """
         Return position-size multiplier combining regime weight + VIX-based
         volatility scaling. When vol is high, we trade smaller.
@@ -142,4 +146,23 @@ class RegimeFilter:
         else:
             vol_scale = 0.60
 
-        return regime_scale * vol_scale
+        scale = regime_scale * vol_scale
+
+        # ── AI Exit Optimizer: override time_stop_days if available ─────────
+        if (
+            config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT
+            and exit_optimizer is not None
+        ):
+            # Use the average time_stop_days across strategies as regime heat signal
+            all_params = exit_optimizer.get_all_params()
+            if all_params:
+                days_values = [p.get("time_stop_days", 15) for p in all_params.values()]
+                avg_days = sum(days_values) / len(days_values)
+                # If avg recommended time_stop < 10 days → market is hostile, reduce further
+                if avg_days < 10:
+                    scale = min(scale, 0.75)
+                # If avg recommended time_stop > 20 days → market is favorable, slight boost
+                elif avg_days > 20:
+                    scale = min(1.0, scale * 1.05)
+
+        return scale

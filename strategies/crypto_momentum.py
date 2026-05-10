@@ -131,7 +131,10 @@ class CryptoMomentum(BaseStrategy):
         if sym in self.WEEKEND_SYMBOLS and now.weekday() >= 5:
             strength = min(1.0, strength * self.WEEKEND_MULT)
 
-        stop = cur_close - config.ATR_STOP_MULT * cur_atr
+        stop_mult = 2.0
+        if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+            stop_mult = self._ai_exit_optimizer.adjust_stop_mult(self.name, 2.0)
+        stop = cur_close - stop_mult * cur_atr
 
         return Signal(
             symbol=sym,

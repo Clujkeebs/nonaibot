@@ -152,7 +152,14 @@ class SentimentAnalyzer:
     def sentiment_multiplier(self, symbol: str, headlines: List[str]) -> float:
         score = self.score_symbol(symbol, headlines)
         # Map sentiment score [-1, 1] to [0.5, 1.5] multiplier
-        mult = 1.0 + score * 0.5  # [0.5, 1.5]
+        # Bearish signal is stronger signal: clip harder on downside
+        # Score -1 (bearish) → 0.5x; Score +1 (bullish) → 1.5x
+        if score < 0:
+            # Bearish: map [-1, 0] → [0.5, 1.0] — asymmetric, penalize more
+            mult = 1.0 + score * 0.5   # -1 → 0.5, 0 → 1.0
+        else:
+            # Bullish: map [0, 1] → [1.0, 1.5]
+            mult = 1.0 + score * 0.5   # 0 → 1.0, +1 → 1.5
         return float(np.clip(mult, 0.5, 1.5))
 
     def update_symbol_sentiment(self, symbol: str, headlines: List[str]) -> None:

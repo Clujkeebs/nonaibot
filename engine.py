@@ -644,6 +644,10 @@ class TradingEngine:
         """
         if self._breaker.is_halted():
             return
+        # Only run during market hours — trimming positions outside hours can
+        # result in unfavorable fills with no chance to react until next morning.
+        if not self._is_market_hours():
+            return
 
         positions = self._portfolio.get_open_positions()
         if not positions:
@@ -773,6 +777,7 @@ class TradingEngine:
                     pass
 
             # Apply technical scorecard multiplier (free AI — no external APIs)
+            # AND cross-validate: reject signals where score conflicts with direction
             if config.ENABLE_AI_LAYER and self._ai_scorecard and sig.side == "buy":
                 try:
                     bars_dict = (
@@ -782,11 +787,21 @@ class TradingEngine:
                     )
                     df = bars_dict.get(sym)
                     if df is not None:
+                        sc = self._ai_scorecard.get_score(sym)
                         score_mult = self._ai_scorecard.get_multiplier(sym)
+                        # Cross-validation: scorecard scores both direction AND conviction
+                        # Score < 35 = very weak/contrarian — reject buy signals here
+                        # Score > 75 = strong momentum — boost conviction
+                        if sc < 35:
+                            log.info(
+                                "Signal REJECTED (scorecard {} {}) — score={:.0f} < 35 (conflicting)",
+                                sym, sig.strategy, sc,
+                            )
+                            continue
                         sig.strength = min(1.0, sig.strength * score_mult)
                         if score_mult != 1.0:
                             log.debug("Scorecard {}: score={:.0f} mult={:.2f}",
-                                     sym, self._ai_scorecard.get_score(sym), score_mult)
+                                     sym, sc, score_mult)
                 except Exception:
                     pass
 
