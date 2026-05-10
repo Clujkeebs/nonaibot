@@ -125,7 +125,7 @@ class TradingEngine:
 
         # Inject AI exit optimizer into all strategies (needed for adaptive stops)
         for strat in self._equity_strategies + self._crypto_strategies:
-            if hasattr(strat, "attach_exit_optimizer") and self._ai_exit_optimizer:
+            if hasattr(strat, "attach_exit_optimizer"):
                 strat.attach_exit_optimizer(self._ai_exit_optimizer)
                 log.debug("Injected AI exit optimizer into {}", strat.name)
 
@@ -363,12 +363,8 @@ class TradingEngine:
                             pass
 
                 # 3. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
-                # 3. Trailing stop — once up TRAIL_ARM_PCT, lock in gains
                 if exit_reason is None and entry_price > 0:
-                    if entry_price > 0:
-                        pnl_pct = (new_high - entry_price) / entry_price
-                    else:
-                        pnl_pct = 0
+                    pnl_pct = (new_high - entry_price) / entry_price
                     if pnl_pct >= config.TRAIL_ARM_PCT:
                         # Dynamic trailing stop: use tighter giveback in high-vol environments
                         # Base giveback on ATR as % of price, scaled by current regime
@@ -805,6 +801,10 @@ class TradingEngine:
             # VIX-based risk scaling: reduce exposure when VIX is high
             vix_scale = self._vix_scale()
 
+            # Respect VIX_RISK_SCALE config flag — don't scale positions if disabled
+            if not config.VIX_RISK_SCALE:
+                vix_scale = 1.0
+
             # Run through risk manager
             approved, reason, qty = self._risk.check_signal(
                 sig,
@@ -1111,15 +1111,28 @@ class TradingEngine:
             except Exception as e:
                 log.warning("AI scorecard refresh error: {}", e)
 
-        # ── AI Sentiment refresh ────────────────────────────────────────────
+        # ── AI Sentiment refresh — parallel fetching for speed ──────────────
         if self._ai_sentiment:
             try:
+                import concurrent.futures
+                top_syms = self._universe.equities[:10]
                 news_by_symbol: Dict[str, List[str]] = {}
-                for sym in self._universe.equities[:10]:  # top 10 only to limit API calls
-                    headlines = self._ai_sentiment.get_recent_headlines(sym, hours=48)
-                    if headlines:
-                        news_by_symbol[sym] = headlines
+
+                def _fetch_headlines(sym: str):
+                    try:
+                        return sym, self._ai_sentiment.get_recent_headlines(sym, hours=48)
+                    except Exception:
+                        return sym, []
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    futures = {executor.submit(_fetch_headlines, sym): sym for sym in top_syms}
+                    for fut in concurrent.futures.as_completed(futures, timeout=20):
+                        sym, headlines = fut.result()
+                        if headlines:
+                            news_by_symbol[sym] = headlines
+
                 if news_by_symbol:
                     self._ai_sentiment.refresh(news_by_symbol)
+                    log.debug("AI sentiment refreshed {} symbols", len(news_by_symbol))
             except Exception as e:
                 log.warning("AI sentiment refresh error: {}", e)

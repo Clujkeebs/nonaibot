@@ -19,9 +19,14 @@ becomes adaptive.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+import pytz
+
 from utils.logger import log
+
+ET = pytz.timezone("America/New_York")
 
 # Multiplier bounds
 _MIN_MULT = 0.5
@@ -57,18 +62,22 @@ class AIPositionSizer:
             return self._cache[key]
 
         # Compute on-demand if cache miss (don't wait for refresh cycle)
-        mult = self._compute_multiplier(strategy, regime)
+        mult = self._compute_multiplier(strategy, regime, max_age_hours=4)
         self._cache[key] = mult
         return mult
 
-    def refresh(self, strategies: List[str], regime: str) -> None:
+    def refresh(self, strategies: List[str], regime: str, max_age_hours: int = 4) -> None:
         """
         Recompute multipliers for all strategies in the current regime.
         Call this periodically (e.g., every 30 min or after batch of exits).
+
+        Args:
+            max_age_hours: ignore trades older than this when computing
+                           multipliers (stale regime data = stale multipliers)
         """
         for strat in strategies:
             key = f"{strat}|{regime}"
-            mult = self._compute_multiplier(strat, regime)
+            mult = self._compute_multiplier(strat, regime, max_age_hours=max_age_hours)
             self._cache[key] = mult
 
         if self._cache:
@@ -83,12 +92,31 @@ class AIPositionSizer:
 
     # ── Internal ─────────────────────────────────────────────────────────
 
-    def _compute_multiplier(self, strategy: str, regime: str) -> float:
-        """Compute size multiplier from recent closed trades."""
+    def _compute_multiplier(self, strategy: str, regime: str, max_age_hours: int = 4) -> float:
+        """Compute size multiplier from recent closed trades (ignoring stale data)."""
+        cutoff = datetime.now(ET) - timedelta(hours=max_age_hours)
+        cutoff_iso = cutoff.isoformat()
+
         trades = self._journal.get_trades(
             strategy=strategy, closed_only=True, limit=50,
         )
         if not trades or len(trades) < _MIN_TRADES:
+            return 1.0
+
+        # Filter out trades older than max_age_hours (stale regime data)
+        fresh_trades = [
+            t for t in trades
+            if t.get("exit_time", "") >= cutoff_iso
+        ]
+        # If no fresh trades, fall back to all trades but log a warning
+        if not fresh_trades:
+            log.debug(
+                "PositionSizer {}|{} — no trades in last {}h, using all {} trades as fallback",
+                strategy, regime, max_age_hours, len(trades),
+            )
+            fresh_trades = trades
+
+        if len(fresh_trades) < _MIN_TRADES:
             return 1.0
 
         # Normalize regime for comparison (handle both enum string and plain string)
@@ -96,19 +124,19 @@ class AIPositionSizer:
 
         # Filter to trades matching this regime (exact match on stored regime string)
         regime_trades = [
-            t for t in trades
+            t for t in fresh_trades
             if t.get("regime", "").lower() == regime_lower
         ]
         if len(regime_trades) < _MIN_TRADES:
             # Fall back: match regime prefix (e.g., "bull" matches "bull_low_vol")
             if regime_lower in ("bull", "bear", "transition", "unknown"):
                 regime_trades = [
-                    t for t in trades
+                    t for t in fresh_trades
                     if t.get("regime", "").lower().startswith(regime_lower)
                 ]
         if len(regime_trades) < _MIN_TRADES:
-            # Use all trades for this strategy as final fallback
-            regime_trades = trades
+            # Use all fresh trades for this strategy as final fallback
+            regime_trades = fresh_trades
 
         if len(regime_trades) < _MIN_TRADES:
             return 1.0

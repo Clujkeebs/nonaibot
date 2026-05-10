@@ -158,7 +158,32 @@ class RiskManager:
                         signal.symbol, (total_exp + notional) / portfolio_value, config.PORTFOLIO_HEAT_MAX)
             return False, "portfolio heat limit reached", 0.0
 
-        # ── Correlation cap: prevent over-concentration in correlated names ───
+        # ── Symbol-level correlation: hardcoded high-correlation pairs ───────
+        # These pairs move together — don't over-concentrate.
+        SYMBOL_CORRELATION_PAIRS = {
+            frozenset({"NVDA", "AMD", "AVGO"}),   # AI chips: correlated drawdown risk
+            frozenset({"SPY", "QQQ"}),            # broad vs tech: macro overlap
+            frozenset({"COIN", "MSTR", "MARA"}),  # crypto equities: Bitcoin proxy
+            frozenset({"BTC/USD", "ETH/USD"}),    # major crypto: co-move
+        }
+
+        def _symbols_correlated(s1: str, s2: str) -> bool:
+            s1_norm = s1.replace("/", "")
+            s2_norm = s2.replace("/", "")
+            return any(s1_norm in pair and s2_norm in pair for pair in SYMBOL_CORRELATION_PAIRS)
+
+        MAX_PAIR_EXPOSURE = 0.20  # max 20% portfolio in any correlated pair
+
+        for s, p in open_positions.items():
+            if _symbols_correlated(signal.symbol, s):
+                pair_exp = p.get("market_value", 0)
+                if (pair_exp + notional) / portfolio_value > MAX_PAIR_EXPOSURE:
+                    log.warning("REJECT {}: symbol pair {} correlation cap (existing={:.1%})",
+                                signal.symbol, f"{signal.symbol}+{s}",
+                                pair_exp / portfolio_value)
+                    return False, "symbol correlation pair limit", 0.0
+
+        # ── Theme-level correlation cap ───────────────────────────────────────
         correlated_themes = {"ai_tech", "crypto_equity", "growth_etf"}
         signal_theme = _universe.theme_for_symbol(signal.symbol)
         if signal_theme in correlated_themes:
