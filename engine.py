@@ -50,6 +50,12 @@ from strategies.volatility_breakout import VolatilityBreakout
 from utils.alerts import alert_daily_summary
 from utils.logger import log
 
+# Optional AI components
+from ai.trade_journal import TradeJournal
+from ai.position_sizer import AIPositionSizer
+from ai.strategy_allocator import AIStrategyAllocator
+from ai.exit_optimizer import AIExitOptimizer
+
 from alpaca.data.timeframe import TimeFrame
 
 ET = pytz.timezone(config.TIMEZONE)
@@ -102,10 +108,16 @@ class TradingEngine:
         # Optional AI layer
         self._ai_ranker = None
         self._ai_regime = None
+        self._ai_journal = TradeJournal()  # always-on — records all trades
+        self._ai_position_sizer = None
+        self._ai_strategy_alloc = None
+        self._ai_exit_optimizer = None
+        # Set far in the past so the first _refresh_ai_models() in __init__ actually runs
+        self._last_ai_refresh = datetime(2000, 1, 1, tzinfo=ET)
         if config.ENABLE_AI_LAYER:
             self._init_ai()
 
-        # Update regime immediately so we don't start in UNKNOWN for an hour
+        # Update regime immediately
         self.update_regime()
 
         log.info(
@@ -137,6 +149,11 @@ class TradingEngine:
             if not strat.enabled:
                 continue
             weight = self._regime.strategy_weight(strat.name)
+            # Apply AI strategy allocator multiplier
+            if config.ENABLE_AI_LAYER and config.ENABLE_AI_STRATEGY_ALLOC and self._ai_strategy_alloc:
+                alloc_w = self._ai_strategy_alloc.get_weight(strat.name)
+                if alloc_w > 0:
+                    weight *= alloc_w * len(self._equity_strategies)
             if weight <= 0:
                 continue
             try:
@@ -174,6 +191,11 @@ class TradingEngine:
             return
 
         weight = self._regime.strategy_weight(orb_strat.name)
+        # Apply AI strategy allocator multiplier
+        if config.ENABLE_AI_LAYER and config.ENABLE_AI_STRATEGY_ALLOC and self._ai_strategy_alloc:
+            alloc_w = self._ai_strategy_alloc.get_weight(orb_strat.name)
+            if alloc_w > 0:
+                weight *= alloc_w * len(self._equity_strategies)
         if weight <= 0:
             return
 
@@ -204,6 +226,11 @@ class TradingEngine:
         all_signals: List[Signal] = []
         for strat in self._crypto_strategies:
             weight = self._regime.strategy_weight(strat.name)
+            # Apply AI strategy allocator multiplier
+            if config.ENABLE_AI_LAYER and config.ENABLE_AI_STRATEGY_ALLOC and self._ai_strategy_alloc:
+                alloc_w = self._ai_strategy_alloc.get_weight(strat.name)
+                if alloc_w > 0:
+                    weight *= alloc_w * len(self._crypto_strategies)
             if weight <= 0:
                 continue
             try:
@@ -290,9 +317,18 @@ class TradingEngine:
                             from datetime import timedelta
                             age = datetime.now(ET) - pos_opened
                             pnl_pct_stale = (cur_price - entry_price) / entry_price
-                            if age.days >= config.TIME_STOP_DAYS and pnl_pct_stale < 0.02:
-                                log.info("{} TIME STOP — {} days old with {:.1%} pnl",
-                                         sym, age.days, pnl_pct_stale)
+                            # Use AI-optimized time stop if available
+                            time_stop_days = config.TIME_STOP_DAYS
+                            if config.ENABLE_AI_LAYER and config.ENABLE_AI_EXIT_OPT and self._ai_exit_optimizer:
+                                try:
+                                    time_stop_days = self._ai_exit_optimizer.adjust_time_stop_days(
+                                        strat_name, config.TIME_STOP_DAYS
+                                    )
+                                except Exception:
+                                    pass
+                            if age.days >= time_stop_days and pnl_pct_stale < 0.02:
+                                log.info("{} TIME STOP — {} days old with {:.1%} pnl (limit {}d)",
+                                         sym, age.days, pnl_pct_stale, time_stop_days)
                                 exit_reason = "time_stop"
                         except Exception:
                             pass
@@ -318,6 +354,17 @@ class TradingEngine:
                     # Ensure qty is positive for close_partial
                     close_qty = abs(float(qty)) if qty is not None else abs(float(pos.get("qty", 0)))
                     self._exec.close_partial(sym, close_qty, cur_price, is_crypto)
+                    # Log exit to AI trade journal AFTER successful close
+                    try:
+                        self._ai_journal.log_exit(
+                            symbol=sym,
+                            exit_price=cur_price,
+                            exit_reason=exit_reason,
+                            entry_price=entry_price,
+                            entry_atr=self._atr_from_df(df),
+                        )
+                    except Exception:
+                        pass
                     self._position_strategy.pop(sym, None)
                     self._position_high.pop(sym, None)
                     self._position_opened.pop(sym, None)
@@ -612,13 +659,32 @@ class TradingEngine:
                 if sym in positions:
                     pos = positions[sym]
                     is_crypto = self._universe.is_crypto(sym)
+                    # Log exit to AI trade journal
+                    try:
+                        self._ai_journal.log_exit(
+                            symbol=sym,
+                            exit_price=sig.price,
+                            exit_reason="strategy_sell_signal",
+                            entry_price=pos.get("avg_price", 0),
+                        )
+                    except Exception:
+                        pass
                     self._exec.close_partial(sym, pos["qty"], sig.price, is_crypto)
                     self._position_strategy.pop(sym, None)
                     self._position_high.pop(sym, None)
                     self._position_opened.pop(sym, None)
                 continue
 
-            # Buy signal — run through risk manager
+            # Buy signal — apply AI position sizer multiplier
+            ai_mult = 1.0
+            if config.ENABLE_AI_LAYER and config.ENABLE_AI_POSITION_SIZER and self._ai_position_sizer:
+                try:
+                    regime = self._regime.regime or "unknown"
+                    ai_mult = self._ai_position_sizer.size_multiplier(sig.strategy, regime)
+                except Exception:
+                    pass
+
+            # Run through risk manager
             approved, reason, qty = self._risk.check_signal(
                 sig,
                 state["portfolio_value"],
@@ -626,6 +692,7 @@ class TradingEngine:
                 positions,
                 self._portfolio.daily_pnl(),
                 confluence.get(sym, 1),
+                ai_mult,
             )
             if not approved:
                 log.info("Signal REJECTED ({}) — {}: {}", sym, sig.strategy, reason)
@@ -641,6 +708,21 @@ class TradingEngine:
             if success:
                 self._position_strategy[sym] = sig.strategy
                 self._position_opened[sym] = datetime.now(ET)
+                # Log entry to AI trade journal
+                try:
+                    self._ai_journal.log_entry(
+                        symbol=sym,
+                        strategy=sig.strategy,
+                        sector=self._universe.theme_for_symbol(sym),
+                        entry_price=sig.price,
+                        entry_atr=sig.atr,
+                        signal_strength=sig.strength,
+                        regime=self._regime.regime or "unknown",
+                        realized_vol=sig.atr / sig.price if sig.price > 0 else 0,
+                        confluence=confluence.get(sym, 1),
+                    )
+                except Exception:
+                    pass
                 # Refresh state after each order
                 state     = self._portfolio.get_account_state()
                 positions = self._portfolio.get_open_positions()
@@ -777,3 +859,62 @@ class TradingEngine:
                 log.info("AI: hmmlearn not installed — regime detector disabled")
         except Exception as e:
             log.warning("AI regime detector init error: {}", e)
+
+        # ── AI Position Sizer ───────────────────────────────────────────
+        if config.ENABLE_AI_POSITION_SIZER:
+            try:
+                self._ai_position_sizer = AIPositionSizer(self._ai_journal)
+                log.info("AI position sizer active")
+            except Exception as e:
+                log.warning("AI position sizer init error: {}", e)
+
+        # ── AI Strategy Allocator ───────────────────────────────────────
+        if config.ENABLE_AI_STRATEGY_ALLOC:
+            try:
+                self._ai_strategy_alloc = AIStrategyAllocator(self._ai_journal)
+                log.info("AI strategy allocator active")
+            except Exception as e:
+                log.warning("AI strategy allocator init error: {}", e)
+
+        # ── AI Exit Optimizer ───────────────────────────────────────────
+        if config.ENABLE_AI_EXIT_OPT:
+            try:
+                self._ai_exit_optimizer = AIExitOptimizer(self._ai_journal)
+                log.info("AI exit optimizer active")
+            except Exception as e:
+                log.warning("AI exit optimizer init error: {}", e)
+
+    # ── AI model refresh ────────────────────────────────────────────────
+
+    def _refresh_ai_models(self) -> None:
+        """
+        Refresh all AI models that learn from trade outcomes.
+        Called at startup and periodically by the scheduler.
+        """
+        now = datetime.now(ET)
+        if (now - self._last_ai_refresh).total_seconds() < config.AI_REFRESH_MINUTES * 60:
+            return
+        self._last_ai_refresh = now
+
+        regime = self._regime.regime or "unknown"
+        all_strats = [s.name for s in self._equity_strategies + self._crypto_strategies]
+        equity_strats = [s.name for s in self._equity_strategies]
+        crypto_strats = [s.name for s in self._crypto_strategies]
+
+        if self._ai_position_sizer:
+            try:
+                self._ai_position_sizer.refresh(all_strats, regime)
+            except Exception as e:
+                log.warning("AI position sizer refresh error: {}", e)
+
+        if self._ai_strategy_alloc:
+            try:
+                self._ai_strategy_alloc.refresh(all_strats)
+            except Exception as e:
+                log.warning("AI strategy allocator refresh error: {}", e)
+
+        if self._ai_exit_optimizer:
+            try:
+                self._ai_exit_optimizer.refresh(all_strats)
+            except Exception as e:
+                log.warning("AI exit optimizer refresh error: {}", e)

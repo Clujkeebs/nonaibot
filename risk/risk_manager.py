@@ -34,6 +34,7 @@ class RiskManager:
         open_positions: Dict[str, dict],
         daily_pnl: float = 0.0,
         confluence: int = 1,
+        ai_size_mult: float = 1.0,
     ) -> Tuple[bool, str, float]:
 
         if portfolio_value <= 0:
@@ -58,7 +59,7 @@ class RiskManager:
 
         # ── Crypto: simple flat-dollar fast-path ──────────────────────────────
         if signal.is_crypto:
-            return self._approve_crypto(signal, portfolio_value, buying_power, open_positions)
+            return self._approve_crypto(signal, portfolio_value, buying_power, open_positions, ai_size_mult)
 
         # ── Equity: full ATR-based sizing ─────────────────────────────────────
         if signal.atr <= 0 or not math.isfinite(signal.atr):
@@ -77,6 +78,12 @@ class RiskManager:
         max_dollars    = portfolio_value * config.MAX_POSITION_PCT * pos_scale
         qty_by_max_pos = max_dollars / signal.price
         raw_qty        = min(qty_by_risk, qty_by_max_pos)
+
+        # AI position sizer adjustment (0.5–1.5× multiplier from trade outcomes)
+        if ai_size_mult != 1.0:
+            raw_qty *= ai_size_mult
+            raw_qty = min(raw_qty, qty_by_max_pos * 1.5)  # re-cap after AI adjustment
+            log.debug("AI size mult {:.2f}x applied to {}", ai_size_mult, signal.symbol)
 
         # Strategy confluence bonus: when 2+ strategies agree, size up
         # Apply BEFORE the min cap to avoid defeating position limits
@@ -161,6 +168,7 @@ class RiskManager:
         portfolio_value: float,
         buying_power: float,
         open_positions: Dict[str, dict],
+        ai_size_mult: float = 1.0,
     ) -> Tuple[bool, str, float]:
         """
         Crypto flat-dollar sizing. No per-crypto allocation cap —
@@ -169,6 +177,12 @@ class RiskManager:
         Floor: MIN_NOTIONAL_CRYPTO ($25). Cap: $6000.
         """
         target = max(config.MIN_NOTIONAL_CRYPTO, min(portfolio_value * 0.035, 6000.0))
+
+        # AI position sizer adjustment
+        if ai_size_mult != 1.0:
+            target *= ai_size_mult
+            target = min(target, portfolio_value * 0.05)  # cap at 5% after AI scaling
+            log.debug("AI size mult {:.2f}x applied to crypto {}", ai_size_mult, signal.symbol)
 
         # If buying power is tight, scale down rather than reject outright.
         if target > buying_power * 0.95:

@@ -57,6 +57,10 @@ ENABLE_SECTOR_ROTATION:     bool = _bool("ENABLE_SECTOR_ROTATION",     "true")
 ENABLE_CRYPTO_MOMENTUM:     bool = _bool("ENABLE_CRYPTO_MOMENTUM",     "true")
 ENABLE_OPENING_RANGE:       bool = _bool("ENABLE_OPENING_RANGE",       "true")
 ENABLE_AI_LAYER:            bool = _bool("ENABLE_AI_LAYER",            "true")
+ENABLE_AI_POSITION_SIZER:   bool = _bool("ENABLE_AI_POSITION_SIZER",   "true")  # adaptive size per strategy+regime
+ENABLE_AI_STRATEGY_ALLOC:   bool = _bool("ENABLE_AI_STRATEGY_ALLOC",   "true")  # dynamic strategy weights
+ENABLE_AI_EXIT_OPT:         bool = _bool("ENABLE_AI_EXIT_OPT",         "true")  # ML-driven stop/tp optimization
+AI_REFRESH_MINUTES:         int   = _int("AI_REFRESH_MINUTES",          "30")    # how often AI models refresh
 
 # ── Thematic universe (23 equity symbols, focused & high-quality) ───────────
 AI_TECH: List[str] = [
