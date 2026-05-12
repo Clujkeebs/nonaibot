@@ -177,6 +177,18 @@ class TaskManager:
             max_instances=1,
         )
 
+        # ── Bad-position cleanup (shorts + tiny positions, every 30 min) ────
+        # Catches any short positions created by paper-trading glitches and
+        # positions that have dropped below minimum notional.
+        self._scheduler.add_job(
+            self._safe(e.cleanup_bad_positions),
+            IntervalTrigger(minutes=30, timezone=ET),
+            id="cleanup_bad_positions",
+            name="Bad Position Cleanup",
+            max_instances=1,
+            coalesce=True,
+        )
+
         self._scheduler.start()
         log.info(
             "TaskManager started — {} jobs scheduled",

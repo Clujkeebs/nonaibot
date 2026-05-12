@@ -113,6 +113,8 @@ class TradingEngine:
         self._init_position_age_table()
         self._load_position_ages()
         self._seed_position_strategies()
+        # Close short positions and tiny positions immediately on startup
+        self._close_bad_positions()
         # VIX data for dynamic risk scaling
         self._vix_level: float = 20.0  # default neutral VIX
 
@@ -358,7 +360,11 @@ class TradingEngine:
                 if df is None:
                     continue
 
-                qty = pos.get("qty", 0)
+                qty = abs(float(pos.get("qty", 0)))  # always positive (long-only)
+                if qty <= 0:
+                    # Short or zero — skip; _close_bad_positions() handles cleanup
+                    continue
+
                 cur_price = float(df["close"].iloc[-1]) if len(df) > 0 else pos["avg_price"]
                 entry_price = pos.get("avg_price", 0)
 
@@ -477,7 +483,12 @@ class TradingEngine:
                 if exit_reason is not None:
                     # Ensure qty is positive for close_partial
                     close_qty = abs(float(qty)) if qty is not None else abs(float(pos.get("qty", 0)))
-                    self._exec.close_partial(sym, close_qty, cur_price, is_crypto)
+                    closed = self._exec.close_partial(sym, close_qty, cur_price, is_crypto)
+                    if not closed:
+                        log.warning("{} exit {} submitted but not fully filled; keeping position tracking active",
+                                    sym, exit_reason)
+                        continue
+
                     # Log exit to AI trade journal AFTER successful close
                     try:
                         self._ai_journal.log_exit(
@@ -504,7 +515,7 @@ class TradingEngine:
                     # Set cooldown after STOP exits so we don't re-buy a falling
                     # knife. Strategy exits (RSI fade, EMA cross) don't get
                     # cooldown — those are normal rotations.
-                    if exit_reason in ("hard_stop", "trailing_stop"):
+                    if exit_reason in ("hard_stop", "atr_stop", "trailing_stop", "early_time_stop"):
                         cooldown_h = config.COOLDOWN_HOURS_CRYPTO if is_crypto else config.COOLDOWN_HOURS_EQUITY
                         until = datetime.now(ET) + timedelta(hours=cooldown_h)
                         self._cooldown_until[sym] = until
@@ -591,6 +602,10 @@ class TradingEngine:
         alert_daily_summary(state["portfolio_value"], pnl, len(positions))
         log.info(self._portfolio.summary())
 
+    def cleanup_bad_positions(self) -> None:
+        """Public wrapper for the scheduler — runs every 30 min."""
+        self._close_bad_positions()
+
     def portfolio_heartbeat(self) -> None:
         try:
             log.info(self._portfolio.summary())
@@ -629,9 +644,12 @@ class TradingEngine:
                     continue
 
                 unrealized_pl = pos.get("unrealized_pl", 0.0)
-                qty           = pos.get("qty", 0.0)
+                qty           = abs(float(pos.get("qty", 0.0)))  # always positive (long-only)
                 avg_price     = pos.get("avg_price", 0.0)
                 market_value  = pos.get("market_value", 0.0)
+
+                if qty <= 0:
+                    continue  # skip zero/short positions (handled by _close_bad_positions)
 
                 atr = self._atr_from_df(df)
 
@@ -776,16 +794,18 @@ class TradingEngine:
                     except Exception:
                         close_price = pos["avg_price"]
 
+                    pos_qty = abs(float(pos.get("qty", 0)))
                     if close_pct >= 0.90:
                         log.info("Rebalance: close {} ({} overweight {:.1%})", sym, theme, overweight)
-                        self._exec.close_partial(sym, pos["qty"], close_price, is_crypto)
+                        if pos_qty > 0:
+                            self._exec.close_partial(sym, pos_qty, close_price, is_crypto)
                         self._position_strategy.pop(sym, None)
                         self._position_high.pop(sym, None)
                         self._position_opened.pop(sym, None)
                         # Clean up all persisted position metadata
                         self._cleanup_position_meta(sym)
                     else:
-                        close_qty = pos["qty"] * close_pct
+                        close_qty = pos_qty * close_pct
                         close_qty = round(close_qty, 4) if is_crypto else math.floor(close_qty)
                         if close_qty > 0:
                             log.info("Rebalance: trim {} {} ({} OW {:.1%})", sym, close_qty, theme, overweight)
@@ -802,40 +822,68 @@ class TradingEngine:
         if not signals:
             return
 
-        # Deduplicate — one signal per symbol, highest strength wins.
-        # Confluence tracks how many strategies generated a BUY, but
-        # sell signals still compete on strength (sector rotation exits
-        # must be able to override buy signals).
-        best: Dict[str, Signal] = {}
-        confluence: Dict[str, int] = {}
-        for sig in signals:
-            if sig.side == "buy":
-                confluence[sig.symbol] = confluence.get(sig.symbol, 0) + 1
-            if sig.symbol not in best or sig.strength > best[sig.symbol].strength:
-                best[sig.symbol] = sig
-
         state     = self._portfolio.get_account_state()
         positions = self._portfolio.get_open_positions()
 
-        for sym, sig in sorted(best.items(), key=lambda x: x[1].strength, reverse=True):
-            if self._breaker.is_halted() and sig.side == "buy":
+        # Exits must take precedence over entries. A strong buy from one
+        # strategy should never mask a sell/rotation exit from another.
+        sell_best: Dict[str, Signal] = {}
+        buy_best: Dict[str, Signal] = {}
+        confluence: Dict[str, int] = {}
+        for sig in signals:
+            if sig.side == "sell":
+                if sig.symbol not in sell_best or sig.strength > sell_best[sig.symbol].strength:
+                    sell_best[sig.symbol] = sig
+            elif sig.side == "buy":
+                confluence[sig.symbol] = confluence.get(sig.symbol, 0) + 1
+                if sig.symbol not in buy_best or sig.strength > buy_best[sig.symbol].strength:
+                    buy_best[sig.symbol] = sig
+
+        for sym, sig in sorted(sell_best.items(), key=lambda x: x[1].strength, reverse=True):
+            if sym not in positions:
+                continue
+            pos = positions[sym]
+            is_crypto = self._universe.is_crypto(sym)
+            try:
+                self._ai_journal.log_exit(
+                    symbol=sym,
+                    exit_price=sig.price,
+                    exit_reason="strategy_sell_signal",
+                    entry_price=pos.get("avg_price", 0),
+                )
+            except Exception:
+                pass
+            close_qty = abs(float(pos.get("qty", 0)))
+            if close_qty <= 0:
+                log.warning("Sell signal for {} but qty=0 — skipping", sym)
+                continue
+            success = self._exec.close_partial(sym, close_qty, sig.price, is_crypto)
+            if success:
+                self._position_strategy.pop(sym, None)
+                self._position_high.pop(sym, None)
+                self._position_opened.pop(sym, None)
+                self._cleanup_position_meta(sym)
+                positions.pop(sym, None)
+
+        for sym, sig in sorted(buy_best.items(), key=lambda x: x[1].strength, reverse=True):
+            if self._breaker.is_halted():
                 break
-
+            if sym in positions:
+                continue
             # Cooldown check — skip buys for symbols recently stopped out
-            if sig.side == "buy":
-                # ORB same-day re-entry guard: don't re-buy same symbol after ORB today
-                if sig.strategy == "opening_range_breakout" and sym in self._orb_traded_today:
-                    log.info("Signal SKIPPED ({} {}) — ORB re-entry guard", sig.strategy, sym)
-                    continue
+            # ORB same-day re-entry guard: don't re-buy same symbol after ORB today
+            if sig.strategy == "opening_range_breakout" and sym in self._orb_traded_today:
+                log.info("Signal SKIPPED ({} {}) — ORB re-entry guard", sig.strategy, sym)
+                continue
 
-                cooldown = self._cooldown_until.get(sym)
-                if cooldown and datetime.now(ET) < cooldown:
-                    log.info("Signal SKIPPED ({}) — cooldown until {}",
-                             sym, cooldown.strftime("%H:%M ET"))
-                    continue
-                elif cooldown:
-                    # Cooldown expired — clean up
-                    self._cooldown_until.pop(sym, None)
+            cooldown = self._cooldown_until.get(sym)
+            if cooldown and datetime.now(ET) < cooldown:
+                log.info("Signal SKIPPED ({}) — cooldown until {}",
+                         sym, cooldown.strftime("%H:%M ET"))
+                continue
+            elif cooldown:
+                # Cooldown expired — clean up
+                self._cooldown_until.pop(sym, None)
 
             # Apply AI rank multiplier
             if config.ENABLE_AI_LAYER and self._ai_ranker and sig.side == "buy":
@@ -892,27 +940,6 @@ class TradingEngine:
                                  sym, self._ai_sentiment.get_sentiment(sym), sent_mult)
                 except Exception:
                     pass
-
-            if sig.side == "sell":
-                # Sell signal (e.g. sector rotation exit) — only act if we hold it
-                if sym in positions:
-                    pos = positions[sym]
-                    is_crypto = self._universe.is_crypto(sym)
-                    # Log exit to AI trade journal
-                    try:
-                        self._ai_journal.log_exit(
-                            symbol=sym,
-                            exit_price=sig.price,
-                            exit_reason="strategy_sell_signal",
-                            entry_price=pos.get("avg_price", 0),
-                        )
-                    except Exception:
-                        pass
-                    self._exec.close_partial(sym, pos["qty"], sig.price, is_crypto)
-                    self._position_strategy.pop(sym, None)
-                    self._position_high.pop(sym, None)
-                    self._position_opened.pop(sym, None)
-                continue
 
             # Buy signal — apply AI position sizer multiplier
             ai_mult = 1.0
@@ -986,6 +1013,70 @@ class TradingEngine:
         if now.weekday() >= 5:
             return False
         return dtime(9, 35) <= now.time() <= dtime(15, 55)
+
+    def _close_bad_positions(self) -> None:
+        """
+        Startup cleanup — called once during __init__.
+
+        Closes:
+          • Short positions  (bot is long-only; shorts are paper-trading
+            glitches from over-selling or double-fire exits)
+          • Positions whose market value is below half the minimum notional
+            (e.g. XRP at $7.92). These are noise that waste the position
+            slot and never exit via normal logic.
+
+        Uses Alpaca's close_position() endpoint directly, which handles the
+        correct direction automatically (buys back shorts, sells longs).
+        """
+        try:
+            from alpaca.trading.client import TradingClient as _TC
+            client = _TC(
+                api_key=config.ALPACA_API_KEY,
+                secret_key=config.ALPACA_SECRET_KEY,
+                paper=config.ALPACA_PAPER,
+            )
+            # Mapping from Alpaca raw symbol (e.g. "BTCUSD") → slash format ("BTC/USD")
+            _slash_map = {s.replace("/", ""): s for s in config.CRYPTO_SYMBOLS}
+
+            raw_positions = client.get_all_positions()
+            closed = 0
+            for p in raw_positions:
+                try:
+                    qty  = float(p.qty)
+                    side = p.side.value if hasattr(p.side, "value") else str(p.side)
+                    mval = abs(float(p.market_value or 0))
+                    # Normalise to slash format for universe lookup
+                    sym_slash = _slash_map.get(p.symbol, p.symbol)
+
+                    if side == "short" or qty < 0:
+                        log.warning(
+                            "STARTUP CLEANUP: closing short position {} qty={:.4f} "
+                            "(paper-trading glitch — bot is long-only)",
+                            p.symbol, qty,
+                        )
+                        client.close_position(p.symbol)
+                        closed += 1
+                        continue
+
+                    # Determine minimum notional for this asset type
+                    is_crypto = self._universe.is_crypto(sym_slash)
+                    min_val = config.MIN_NOTIONAL_CRYPTO if is_crypto else config.MIN_NOTIONAL
+                    if 0 < mval < min_val * 0.5:
+                        log.warning(
+                            "STARTUP CLEANUP: closing tiny position {} val=${:.2f} "
+                            "(below half of ${:.0f} min notional)",
+                            p.symbol, mval, min_val,
+                        )
+                        client.close_position(p.symbol)
+                        closed += 1
+                except Exception as e2:
+                    log.warning("_close_bad_positions: error on {}: {}", p.symbol, e2)
+            if closed:
+                log.info("STARTUP CLEANUP: closed {} bad position(s)", closed)
+            else:
+                log.info("STARTUP CLEANUP: no bad positions found — all clean")
+        except Exception as e:
+            log.warning("_close_bad_positions error: {}", e)
 
     def _seed_position_strategies(self) -> None:
         """

@@ -95,12 +95,29 @@ class PortfolioTracker:
             result = {}
             for p in positions:
                 sym = _CRYPTO_SLASH.get(p.symbol, p.symbol)
+                side = p.side.value if hasattr(p.side, "value") else str(p.side)
+                qty  = float(p.qty)
+
+                # Bot is long-only. Short positions are bugs (over-sold, paper
+                # trading glitch). Skip them so they don't:
+                #   • Block new buy signals via "already holding" check
+                #   • Reduce total_exp via negative market_value (masking heat)
+                #   • Trigger long-side exit logic on a short
+                # The engine's _close_bad_positions() handles closing them.
+                if side == "short" or qty < 0:
+                    log.warning(
+                        "Skipping SHORT position {} qty={:.4f} — bot is long-only; "
+                        "call _close_bad_positions() to clean up",
+                        sym, qty,
+                    )
+                    continue
+
                 result[sym] = {
-                    "qty":           float(p.qty),
+                    "qty":           qty,
                     "avg_price":     float(p.avg_entry_price),
                     "market_value":  float(p.market_value or 0),
                     "unrealized_pl": float(p.unrealized_pl or 0),
-                    "side":          p.side.value if hasattr(p.side, "value") else str(p.side),
+                    "side":          side,
                 }
             return result
         except Exception as e:
