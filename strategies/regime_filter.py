@@ -153,7 +153,13 @@ class RegimeFilter:
         log.debug("Regime AI override: {} weight → {:.3f}", strategy_name, weight)
 
     def equity_trading_enabled(self) -> bool:
-        return True  # weights reduce size in bad regimes; never hard-block
+        # Hard-block equity entries in a high-vol bear market.
+        # Weights alone are insufficient — even 0.4× weight on a bad signal
+        # is still a losing trade.  Go to cash on equities when the regime
+        # is the worst combination: falling market + elevated volatility.
+        if self._regime == Regime.BEAR_HIGH_VOL:
+            return False
+        return True
 
     def max_position_scale(
         self,

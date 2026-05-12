@@ -139,9 +139,12 @@ class CircuitBreaker:
             return
         loss_pct = -daily_pnl / portfolio_value
         if loss_pct >= config.DAILY_LOSS_LIMIT_PCT:
+            # FULL_HALT — not just trade halt.  Stopping new entries while
+            # existing losing positions remain open means the bad day keeps
+            # getting worse.  Close everything and go to cash.
             self.trigger(
-                HaltLevel.TRADE_HALT,
-                f"Daily loss {loss_pct:.2%} ≥ limit {config.DAILY_LOSS_LIMIT_PCT:.2%}",
+                HaltLevel.FULL_HALT,
+                f"Daily loss {loss_pct:.2%} ≥ limit {config.DAILY_LOSS_LIMIT_PCT:.2%} — closing all positions",
             )
 
     def check_weekly_loss(

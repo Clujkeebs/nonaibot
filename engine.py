@@ -914,11 +914,11 @@ class TradingEngine:
                         sc = self._ai_scorecard.get_score(sym)
                         score_mult = self._ai_scorecard.get_multiplier(sym)
                         # Cross-validation: scorecard scores both direction AND conviction
-                        # Score < 35 = very weak/contrarian — reject buy signals here
+                        # Score < 55 = below-average setup — skip; wait for better entry
                         # Score > 75 = strong momentum — boost conviction
-                        if sc < 45:
+                        if sc < 55:
                             log.info(
-                                "Signal REJECTED (scorecard {} {}) — score={:.0f} < 45 (weak setup)",
+                                "Signal REJECTED (scorecard {} {}) — score={:.0f} < 55 (below-average setup)",
                                 sym, sig.strategy, sc,
                             )
                             continue

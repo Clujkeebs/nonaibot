@@ -33,7 +33,7 @@ class TrendFollowing(BaseStrategy):
     SLOW_EMA   = 21
     TREND_EMA  = 50
     ADX_PERIOD = 14
-    ADX_MIN    = 20.0
+    ADX_MIN    = 25.0   # was 20 — only trade confirmed strong trends
     ATR_PERIOD = 14
 
     def generate_signals(self, bars: Dict[str, pd.DataFrame]) -> List[Signal]:

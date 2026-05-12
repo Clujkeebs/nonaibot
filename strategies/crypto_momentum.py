@@ -38,17 +38,17 @@ class CryptoMomentum(BaseStrategy):
     name = "crypto_momentum"
     timeframe_days = 30   # hourly bars, so ~30 days = ~720 bars
 
-    RSI_ENTRY  = 50.0    # was 45 — too low, entering weak momentum
-    RSI_EXIT   = 40.0
+    RSI_ENTRY  = 55.0    # was 50/45 — only enter with real momentum
+    RSI_EXIT   = 45.0    # was 40 — exit earlier before momentum dies
     RSI_MAX    = 72.0    # don't chase overbought
     SMA_FAST   = 20
-    SMA_SLOW   = 50      # new — multi-timeframe trend filter
+    SMA_SLOW   = 50      # multi-timeframe trend filter
     ADX_PERIOD = 14
-    ADX_MIN    = 20.0    # new — trend strength confirmation
+    ADX_MIN    = 22.0    # was 20 — stronger trend confirmation
     ADX_EXIT   = 18.0    # exit when trend weakens
     ATR_PERIOD = 14
     MOM_LOOKBACK = 24    # hours for return check
-    MOM_MIN     = 0.02   # 2% minimum 24h return — was 1%
+    MOM_MIN     = 0.025  # 2.5% minimum 24h return — was 2%
 
     # Weekend boost REMOVED — weekends are riskier for crypto (thin books,
     # DeFi liquidations, lower institutional volume). Entering at 1.2× strength

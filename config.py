@@ -42,10 +42,10 @@ COOLDOWN_HOURS_CRYPTO: int  = _int("COOLDOWN_HOURS_CRYPTO",  "6")      # crypto 
 ATR_STOP_MULT: float        = _float("ATR_STOP_MULT",        "1.5")    # 1.5× ATR stop
 DAILY_LOSS_LIMIT_PCT: float = _float("DAILY_LOSS_LIMIT_PCT", "0.02")   # 2% daily halt (was 3 — was firing too late)
 WEEKLY_LOSS_LIMIT_PCT: float = _float("WEEKLY_LOSS_LIMIT_PCT","0.05")  # 5% weekly halt (was 7)
-MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "40")
+MAX_OPEN_POSITIONS: int     = _int("MAX_OPEN_POSITIONS",     "10")    # was 40 — quality over quantity
 MIN_ATR_PCT: float          = _float("MIN_ATR_PCT",          "0.005")  # skip illiquid symbols
-PORTFOLIO_HEAT_MAX: float   = max(0.40, _float("PORTFOLIO_HEAT_MAX",   "0.70"))  # max total risk-on (floor 0.40, was 0.80)
-TIME_STOP_DAYS: int         = _int("TIME_STOP_DAYS",         "15")     # close positions flat after N days
+PORTFOLIO_HEAT_MAX: float   = max(0.35, _float("PORTFOLIO_HEAT_MAX",   "0.55"))  # max total risk-on (floor 0.35, was 0.70)
+TIME_STOP_DAYS: int         = _int("TIME_STOP_DAYS",         "7")      # was 15 — cut flat/losing positions in 1 week
 CONFLUENCE_BONUS: float     = _float("CONFLUENCE_BONUS",     "0.25")   # extra size when 2+ strats agree
 VIX_RISK_SCALE: bool        = _bool("VIX_RISK_SCALE",        "true")   # scale positions by VIX level
 
