@@ -174,6 +174,64 @@ class Bot:
             logger.warning("Could not fetch positions: %s", e)
             return {}
 
+    # ── Position reconciliation (adopt manual trades) ──────────────────────────
+
+    def _reconcile_positions(self, open_positions: Dict) -> None:
+        """
+        Adopt any open position the bot isn't already tracking — for example a
+        trade you place by hand in Alpaca (buy $10 of a new stock).
+
+        For each untracked position we:
+          - add the symbol to the dynamic watchlist (so it's actively watched and
+            protected from being dropped by the screener while held)
+          - record an entry-age and high-water mark so the bot fully manages its
+            exits (ATR stop, trailing stop, take profit, time stop)
+
+        Detection: a position with no entry-age record in the DB is one the bot
+        didn't open itself. Adoption time is used as the time-stop clock start
+        (we don't have the original fill timestamp from the positions endpoint).
+        """
+        if not open_positions:
+            return
+
+        tracked = self._state.get_position_ages()  # symbols the bot already manages
+        core_set = set(self._cfg.core_equities + self._cfg.core_crypto)
+        now_et = datetime.now(ET)
+
+        for sym, pos in open_positions.items():
+            if sym in tracked:
+                continue  # already managed — nothing to do
+
+            is_crypto = "/" in sym
+            qty = float(pos.get("qty", 0))
+            avg_price = float(pos.get("avg_price", 0))
+            seed_high = avg_price if avg_price > 0 else float(pos.get("market_value", 0))
+
+            # Record entry-age (adoption time) and seed the high-water mark
+            self._state.save_position_age(sym, now_et, strategy="manual")
+            self._position_highs[sym] = seed_high
+            self._state.save_position_high(sym, seed_high)
+
+            # Add to dynamic watchlist unless it's already a core/watchlist symbol
+            if sym not in core_set:
+                if is_crypto and sym not in self._cfg.dynamic_crypto:
+                    self._state.add_dynamic_symbol(sym, "crypto", "manual position adopted")
+                    self._cfg.dynamic_crypto.append(sym)
+                elif not is_crypto and sym not in self._cfg.dynamic_equities:
+                    self._state.add_dynamic_symbol(sym, "equity", "manual position adopted")
+                    self._cfg.dynamic_equities.append(sym)
+
+            logger.info(
+                "ADOPTED untracked position %s qty=%.6f @ $%.4f — now watching & managing exits",
+                sym, qty, avg_price,
+            )
+            send_alert(
+                f"ADOPTED {sym} qty={qty:.6f} @ ${avg_price:.4f} — added to watchlist, "
+                f"now managing exits (ATR / trailing / take-profit / time stop)",
+                self._cfg,
+                level="INFO",
+            )
+
     # ── Exit checker ──────────────────────────────────────────────────────────
 
     def _check_exits(self, open_positions: Dict, equity: float) -> None:
@@ -430,7 +488,7 @@ class Bot:
             return
         logger.info("Running screener...")
         try:
-            added, dropped = self._screener.run()
+            added, dropped = self._screener.run(held_symbols=set(open_positions.keys()))
             if added or dropped:
                 logger.info("Screener: +%s -%s", added, dropped)
             # Refresh dynamic watchlist in config
@@ -497,7 +555,11 @@ class Bot:
             level="INFO",
         )
 
-        # Warm-up: initial regime
+        # Warm-up: adopt any positions placed while the bot was offline, then regime
+        try:
+            self._reconcile_positions(self._get_open_positions())
+        except Exception as e:
+            logger.warning("Startup reconciliation failed: %s", e)
         self._update_regime()
 
         while self._running:
@@ -543,6 +605,9 @@ class Bot:
 
         # Open positions
         open_positions = self._get_open_positions()
+
+        # Adopt any manually-placed trades into the managed watchlist
+        self._reconcile_positions(open_positions)
 
         # Exit checker (every tick)
         self._check_exits(open_positions, equity)

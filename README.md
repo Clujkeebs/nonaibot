@@ -22,6 +22,21 @@ Deploys to Railway as an always-on worker process with SQLite state persistence.
 
 A **regime filter** (SPY vs 50/200 MA + ADX) weights strategies appropriately for current market conditions.
 
+## Manual Trades Are Auto-Adopted
+
+If you place a trade by hand in Alpaca — say you buy $10 of a new stock — the bot
+detects the untracked position on its next tick and **adopts** it:
+
+- adds the symbol to the dynamic watchlist so it's actively watched
+- records an entry time and high-water mark so the bot manages its exits
+  (ATR stop, trailing stop, take profit, time stop) just like its own trades
+- protects it from the screener — a held symbol is never rotated out of the
+  watchlist until the position is closed
+
+Adoption is idempotent (it only happens once per position) and runs both at
+startup and on every loop tick, so positions opened while the bot was offline
+are picked up immediately when it restarts.
+
 ## Risk Controls
 
 - **ATR stop**: hard floor at entry − 2×ATR

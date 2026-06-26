@@ -20,7 +20,7 @@ the config.dynamic_equities/crypto fields are read from DB on each reload).
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -48,14 +48,19 @@ class Screener:
         self._state = state
         self._cfg = config
 
-    def run(self) -> Tuple[List[str], List[str]]:
+    def run(self, held_symbols: Optional[Set[str]] = None) -> Tuple[List[str], List[str]]:
         """
         Run full screener pass. Returns (added, removed) symbol lists.
         Updates state DB with changes.
+
+        held_symbols: symbols with an open position. These are never dropped from
+        the dynamic watchlist even if they fail the screen — we keep watching what
+        we hold until the position is closed.
         """
         cfg = self._cfg
         added: List[str] = []
         removed: List[str] = []
+        held: Set[str] = held_symbols or set()
 
         core_set: Set[str] = set(cfg.core_equities + cfg.core_crypto)
         current_dynamic_eq = set(self._state.get_dynamic_symbols("equity"))
@@ -64,7 +69,7 @@ class Screener:
         # ── Screen equities ─────────────────────────────────────────────
         try:
             eq_add, eq_remove = self._screen_equities(
-                cfg.screener_equity_pool, current_dynamic_eq, core_set
+                cfg.screener_equity_pool, current_dynamic_eq, core_set, held
             )
             for sym, metric in eq_remove:
                 self._state.remove_dynamic_symbol(sym, metric)
@@ -83,7 +88,7 @@ class Screener:
         # ── Screen crypto ────────────────────────────────────────────────
         try:
             cr_add, cr_remove = self._screen_crypto(
-                cfg.screener_crypto_pool, current_dynamic_cr, core_set
+                cfg.screener_crypto_pool, current_dynamic_cr, core_set, held
             )
             for sym, metric in cr_remove:
                 self._state.remove_dynamic_symbol(sym, metric)
@@ -119,6 +124,7 @@ class Screener:
         pool: List[str],
         current_dynamic: Set[str],
         core_set: Set[str],
+        held: Set[str] = frozenset(),
     ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
         """Screen equity pool. Returns (to_add, to_remove) lists of (symbol, metric_reason)."""
         cfg = self._cfg
@@ -143,8 +149,9 @@ class Screener:
 
             result = self._score_equity(sym, df, cfg)
             if result is None:
-                # Symbol failed a filter — if it's currently dynamic, flag for removal
-                if sym in current_dynamic:
+                # Symbol failed a filter — if it's currently dynamic, flag for removal,
+                # unless we still hold it (keep watching open positions).
+                if sym in current_dynamic and sym not in held:
                     to_remove.append((sym, "failed_screener_filters"))
                 continue
 
@@ -235,6 +242,7 @@ class Screener:
         pool: List[str],
         current_dynamic: Set[str],
         core_set: Set[str],
+        held: Set[str] = frozenset(),
     ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
         """Screen crypto pool. Returns (to_add, to_remove)."""
         cfg = self._cfg
@@ -257,14 +265,14 @@ class Screener:
 
             close = df["close"]
             if len(close) < 168:  # need 7 days of hourly bars
-                if sym in current_dynamic:
+                if sym in current_dynamic and sym not in held:
                     to_remove.append((sym, "insufficient_data"))
                 continue
 
             # 7-day return
             ret_7d = float((close.iloc[-1] / close.iloc[-168]) - 1)
             if ret_7d < cfg.scr_crypto_min_return_7d:
-                if sym in current_dynamic:
+                if sym in current_dynamic and sym not in held:
                     to_remove.append((sym, f"ret_7d={ret_7d:.1%} below threshold"))
                 continue
 
