@@ -1,0 +1,52 @@
+# Core bot settings
+# Most can be overridden via environment variables (env vars take precedence).
+# Trading mode is controlled by TRADING_MODE env var (paper | live). Default: paper.
+
+loop:
+  equity_interval_min: 5        # equity scan every N minutes (market hours only)
+  crypto_interval_min: 5        # crypto scan every N minutes (24/7)
+  exit_check_interval_min: 2    # stop/exit check every N minutes
+  regime_update_interval_min: 30  # regime re-classification every N minutes
+  circuit_check_interval_sec: 60  # circuit breaker check every N seconds
+  heartbeat_interval_sec: 300   # status log every N seconds
+
+schedule:
+  screener_hour_et: 8           # run screener at 8:00 AM ET (pre-market)
+  audit_hour_et: 8              # generate audit report at 8:00 AM ET
+  daily_reset_hour_et: 4        # reset daily loss counters at 4 AM ET
+
+market:
+  equity_open_hour: 9
+  equity_open_min: 35           # 09:35 ET — 5 min warmup after open
+  equity_close_hour: 15
+  equity_close_min: 55          # 15:55 ET — 5 min cooldown before close
+  timezone: "America/New_York"
+
+data:
+  equity_lookback_days: 252     # ~1 year of daily bars for indicators
+  crypto_lookback_days: 45      # 45 days of hourly bars for crypto
+  cache_ttl_seconds: 60         # bar data cache TTL (avoid hammering API)
+  iex_feed: true                # use IEX feed (free tier); set false for SIP
+
+server:
+  port: 8080                    # HTTP health/status server port
+  host: "0.0.0.0"
+
+logging:
+  level: "INFO"                 # DEBUG | INFO | WARNING | ERROR
+  file: "logs/bot.log"
+  max_bytes: 10485760           # 10 MB per log file
+  backup_count: 5
+
+db:
+  path: "bot.db"                # SQLite DB path; Railway mounts /data, set DB_PATH=/data/bot.db
+
+notifications:
+  # Set env vars to enable each channel — all are off by default
+  # SLACK_WEBHOOK_URL, DISCORD_WEBHOOK_URL,
+  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
+  on_trade: true
+  on_error: true
+  on_circuit_breaker: true
+  on_audit: true
+  on_kill_switch: true

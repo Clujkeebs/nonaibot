@@ -1,0 +1,108 @@
+# Watchlist configuration
+# core: symbols that are ALWAYS watched; the screener never removes these.
+# dynamic: up to max_slots symbols the screener can add/remove automatically.
+# veto: symbols the screener must NEVER propose (user-controlled exclusion list).
+
+core:
+  equities:
+    - NLR       # uranium/nuclear ETF
+    - SMH       # semiconductors ETF
+    - LLY       # Eli Lilly (large-cap pharma)
+  crypto:
+    - SOL/USD   # Solana — core per spec
+    - BTC/USD   # Bitcoin — anchor / volatility reference
+    - ETH/USD   # Ethereum — second anchor
+
+dynamic:
+  max_slots: 5              # screener fills up to this many extra equity slots
+  max_crypto_slots: 2       # screener fills up to this many extra crypto slots
+  equities: []              # screener manages this list — do not edit manually
+  crypto: []                # screener manages this list — do not edit manually
+
+# Symbols the screener will NEVER propose (user veto list).
+# Add tickers here to permanently block them from dynamic rotation.
+veto: []
+
+# --- Screener candidate pool ---
+# The screener draws from this pool to find new dynamic candidates.
+# Extend this list to give the screener more options to screen from.
+# All must be tradable on Alpaca US equities.
+screener_pool:
+  equities:
+    - NVDA
+    - MSFT
+    - AAPL
+    - AMZN
+    - GOOGL
+    - META
+    - TSLA
+    - AVGO
+    - AMD
+    - PLTR
+    - CRWD
+    - MU
+    - QQQ
+    - SPY
+    - XLK
+    - XLE
+    - XLV
+    - COIN
+    - MSTR
+    - MARA
+    - GLD
+    - TLT
+    - UNH
+    - JNJ
+    - JPM
+    - BAC
+    - V
+    - MA
+    - HD
+    - WMT
+    - COST
+    - NFLX
+    - ORCL
+    - CRM
+    - SNOW
+    - PANW
+    - ZS
+    - DDOG
+    - TEAM
+    - NOW
+    - ADBE
+    - INTC
+    - QCOM
+    - TXN
+    - ARM
+    - AMAT
+    - LRCX
+    - KLAC
+    - ON
+    - MRVL
+
+  crypto:
+    - AVAX/USD
+    - LINK/USD
+    - DOT/USD
+    - UNI/USD
+    - AAVE/USD
+    - LTC/USD
+    - XRP/USD
+    - ADA/USD
+    - DOGE/USD
+    - BCH/USD
+
+# --- Screener filter criteria ---
+screener:
+  equity:
+    min_avg_dollar_volume: 50000000   # $50M/day minimum liquidity
+    min_price: 5.00                    # no penny stocks
+    require_fractionable: true         # must support fractional orders
+    min_return_20d: 0.02               # must be up at least 2% over last 20 days
+    min_atr_pct: 0.005                 # must move at least 0.5% per day (not a dead stock)
+    max_atr_pct: 0.10                  # not a meme rocket (max 10% daily ATR)
+    top_n: 5                           # pick best N passing symbols
+
+  crypto:
+    min_return_7d: 0.0                 # must not be in freefall
+    top_n: 2                           # pick best N passing crypto

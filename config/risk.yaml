@@ -1,0 +1,60 @@
+# Risk management parameters
+# These are the most important settings for a $100 account.
+# Philosophy: (1) don't blow up, (2) preserve capital, (3) grow.
+
+# ── Position sizing ────────────────────────────────────────────────────────────
+# ATR-based Kelly-like sizing: risk a fixed small % of equity per trade.
+# qty = (risk_per_trade_pct × equity) / (atr_stop_mult × ATR)
+sizing:
+  risk_per_trade_pct: 0.01       # risk 1% of account equity per trade
+  max_position_pct: 0.10         # max 10% of portfolio in any single symbol
+  max_concurrent_positions: 8    # max simultaneous positions (quality > quantity)
+  max_crypto_allocation_pct: 0.30  # max 30% of portfolio in crypto total
+  portfolio_heat_max: 0.60       # max 60% of portfolio actively deployed
+  min_notional: 1.00             # $1 absolute minimum per order (Alpaca rule)
+  confluence_bonus_pct: 0.25     # +25% size when 2+ signals agree on same symbol
+
+# ── Stop-loss & take-profit ────────────────────────────────────────────────────
+# Enforced in SOFTWARE — fractional positions cannot use resting stop orders.
+# ATR-based stops self-adjust to current volatility.
+stops:
+  atr_period: 14                 # ATR lookback period
+  atr_stop_mult: 2.0             # stop = entry_price - (2 × ATR)
+  take_profit_ratio: 2.0         # TP target = entry + (take_profit_ratio × stop_distance)
+  # WHY 2:1 R/R: with 50% win rate you break even; any better rate is profitable.
+
+  trailing_arm_pct: 0.08         # arm trailing stop after +8% unrealized gain
+  trailing_giveback_pct: 0.05    # trail stops 5% below the running high
+
+  time_stop_days: 10             # exit position if it hasn't moved in N days
+  time_stop_min_pnl_pct: 0.02   # only time-stop if PnL < +2% (don't cut winners)
+  early_time_stop_days: 5        # also exit if losing >1.5% after N days
+  early_time_stop_loss_pct: 0.015
+
+# ── Cooldowns ─────────────────────────────────────────────────────────────────
+# After a stop-out, wait before re-entering the same symbol.
+# WHY: prevents "death by a thousand cuts" from repeatedly re-buying a falling asset.
+cooldown:
+  equity_hours: 24               # 24h equity cooldown after stop-out
+  crypto_hours: 6                # 6h crypto cooldown (recovers faster)
+
+# ── Circuit breakers ───────────────────────────────────────────────────────────
+# SOFT HALT: drawdown exceeds soft threshold → pause NEW entries, manage exits normally
+# HARD HALT: drawdown exceeds hard threshold → flatten all positions, stop all trading
+# KILL SWITCH: absolute floor breached → hard halt + persist flag until human resets
+circuit_breakers:
+  soft_halt_drawdown_pct: 0.05   # 5% drawdown from equity high-water → soft halt
+  hard_halt_drawdown_pct: 0.10   # 10% drawdown from equity high-water → hard halt + flatten
+  daily_loss_limit_pct: 0.03     # 3% single-day loss → halt until next session reset
+  kill_switch_floor: 85.00       # if equity < $85, trigger permanent kill switch
+  kill_switch_enabled: true      # set false to disable kill switch (testing only)
+  # To recover from kill switch: set kill_switch_override: true here, then deploy.
+  kill_switch_override: false    # user sets this true to manually re-enable after kill
+
+# ── Self-diagnostics ───────────────────────────────────────────────────────────
+# Detect components misbehaving and throttle/disable them automatically.
+diagnostics:
+  max_consecutive_order_rejections: 5   # disable a strategy if N consecutive rejections
+  error_rate_window_minutes: 60          # window for error rate calculation
+  max_errors_per_window: 10             # too many errors → throttle + alert
+  stale_data_threshold_minutes: 30      # bars older than N min = stale data warning

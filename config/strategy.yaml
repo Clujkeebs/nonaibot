@@ -1,0 +1,58 @@
+# Strategy parameters — all thresholds here so no code changes needed to tune
+# Each strategy section maps to the corresponding strategy/ module.
+
+# ── Regime filter ──────────────────────────────────────────────────────────────
+# Uses SPY daily bars to classify the broad market environment.
+# Per-symbol regime uses the symbol's own ADX.
+regime:
+  spy_fast_ma: 50         # SPY must be above 50-day MA for "bull" regime
+  spy_slow_ma: 200        # SPY must be above 200-day MA for "strong bull"
+  adx_trending_threshold: 20   # ADX > 20 → symbol is trending (use trend strategy)
+  adx_ranging_threshold: 20    # ADX <= 20 → symbol is ranging (use mean reversion)
+
+# ── Trend / Momentum strategy ──────────────────────────────────────────────────
+# EMA crossover with ADX trend strength filter.
+# WHY: captures established trends; ADX filter avoids whipsaw entries in chop.
+trend:
+  enabled: true
+  fast_ema: 20            # fast EMA period (price direction)
+  slow_ema: 50            # slow EMA period (trend confirmation)
+  adx_period: 14          # ADX lookback
+  adx_threshold: 20       # must be trending (ADX > 20) to enter
+  min_slope_pct: 0.0005   # slow EMA must be rising (slope per bar > 0.05%)
+  require_fresh_cross: false  # false = allow continuation entries (not just new crosses)
+
+# ── Mean-Reversion strategy ────────────────────────────────────────────────────
+# RSI oversold + Bollinger Band lower touch.
+# WHY: in range-bound markets, prices revert to mean; RSI and BB identify extremes.
+mean_reversion:
+  enabled: true
+  rsi_period: 14
+  rsi_oversold: 35        # enter when RSI drops below this (oversold)
+  rsi_overbought: 65      # exit when RSI climbs above this (overbought)
+  bb_period: 20
+  bb_std: 2.0
+  require_bb_lower_touch: true  # price must be at or below lower BB to enter
+
+# ── Crypto Momentum strategy ───────────────────────────────────────────────────
+# EMA crossover + volume spike + RSI in momentum sweet spot.
+# WHY: crypto trends sharply; volume spike confirms genuine moves vs fake-outs.
+crypto_momentum:
+  enabled: true
+  fast_ema: 12            # hourly bars — 12h fast EMA
+  slow_ema: 26            # 26h slow EMA
+  rsi_period: 14
+  rsi_min: 40             # don't enter deeply oversold (not a reversal strategy)
+  rsi_max: 70             # don't chase overbought
+  volume_ratio_min: 1.3   # volume must be 1.3x 20-period average to confirm move
+
+# ── Edge gate ─────────────────────────────────────────────────────────────────
+# Bot may only open a trade if the expected profit comfortably beats round-trip costs.
+# Crypto taker fee: 0.25% entry + 0.25% exit = 0.50% round-trip.
+# Equity: $0 commission but ~0.05-0.15% spread/slippage.
+# Expected profit = take_profit_ratio × ATR_stop_mult × (ATR / price).
+edge_gate:
+  crypto_min_edge_pct: 0.008   # must expect > 0.8% net move (1.6× round-trip cost)
+  equity_min_edge_pct: 0.004   # must expect > 0.4% net move
+  # WHY these values: 1.6× round-trip leaves margin for slippage; on a $100 account
+  # even 0.5% costs $0.50 per trade — fee bleed kills small accounts.

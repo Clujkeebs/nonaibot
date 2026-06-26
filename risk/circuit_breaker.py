@@ -1,194 +1,188 @@
 """
-Circuit Breakers — hardware kill-switch for the bot.
+CircuitBreaker — account-level safety valves.
 
-Three levels of protection:
-  1. TRADE_HALT  — stop opening new positions; hold existing ones
-  2. FULL_HALT   — close ALL positions immediately; stop all activity
-  3. KILL_SWITCH — permanent manual override (set via env var)
+Levels (escalating):
+  NORMAL      — all clear, trade freely
+  SOFT_HALT   — drawdown from equity high exceeded soft threshold
+                → pause NEW entries, continue managing exits and stops
+  HARD_HALT   — drawdown exceeded hard threshold OR daily loss exceeded
+                → flatten all positions, stop all trading until next session
+  KILLED      — equity fell below absolute floor ($85 default)
+                → permanent halt until human re-enables via config flag
 
-Triggers:
-  - Daily P&L loss > DAILY_LOSS_LIMIT_PCT
-  - Weekly P&L loss > WEEKLY_LOSS_LIMIT_PCT
-  - Single position loss > 2× ATR stop (handled per-position in risk manager)
-  - Manual kill switch (KILL_SWITCH=1 env var)
-
-State is persisted to SQLite so a restart does NOT reset the breaker.
-The breaker resets automatically at 9:00 AM ET each weekday (daily_reset).
+Self-correction:
+  - SOFT_HALT resets at daily open (new day, fresh start)
+  - HARD_HALT resets at daily open (circuit resets with the day)
+  - KILLED never auto-resets — requires human intervention
 """
 from __future__ import annotations
 
-import os
-import sqlite3
-from datetime import datetime
-from enum import Enum
-from typing import Optional
+import logging
+from enum import Enum, auto
 
-import pytz
+from core.config import BotConfig
 
-import config
-from utils.alerts import alert_circuit_break
-from utils.logger import log
-
-ET = pytz.timezone(config.TIMEZONE)
+logger = logging.getLogger(__name__)
 
 
-class HaltLevel(str, Enum):
-    NONE       = "none"
-    TRADE_HALT = "trade_halt"   # no new entries
-    FULL_HALT  = "full_halt"    # close everything
+class HaltLevel(Enum):
+    NORMAL = auto()
+    SOFT_HALT = auto()
+    HARD_HALT = auto()
+    KILLED = auto()
 
 
 class CircuitBreaker:
-    """
-    Thread-safe circuit breaker backed by SQLite.
-    All public methods are safe to call from multiple scheduler threads.
-    """
+    def __init__(self, config: BotConfig) -> None:
+        self._cfg = config
+        self._level: HaltLevel = HaltLevel.NORMAL
+        self._halt_reason: str = ""
+        self._high_water_mark: float = 0.0
+        self._consecutive_losses: int = 0
 
-    _TABLE = """
-    CREATE TABLE IF NOT EXISTS circuit_breaker (
-        id          INTEGER PRIMARY KEY,
-        level       TEXT    NOT NULL DEFAULT 'none',
-        reason      TEXT,
-        triggered_at TEXT,
-        reset_at    TEXT
-    )
-    """
+    # ── Public query interface ─────────────────────────────────────────────────
 
-    def __init__(self, db_path: str = config.DB_PATH) -> None:
-        self._db   = db_path
-        self._kill = _env_kill()
-        self._loss_timestamps: list = []   # recent losing trade timestamps
-        self._init_db()
-        log.info("CircuitBreaker initialised — kill_switch={}", self._kill)
+    @property
+    def level(self) -> HaltLevel:
+        return self._level
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def is_normal(self) -> bool:
+        return self._level == HaltLevel.NORMAL
 
-    def _init_db(self) -> None:
-        with self._conn() as c:
-            c.execute(self._TABLE)
-            if c.execute("SELECT COUNT(*) FROM circuit_breaker").fetchone()[0] == 0:
-                c.execute(
-                    "INSERT INTO circuit_breaker (level, reason) VALUES (?, ?)",
-                    (HaltLevel.NONE, "init"),
-                )
+    def new_entries_allowed(self) -> bool:
+        """False during any halt. Exits still run in SOFT_HALT."""
+        return self._level == HaltLevel.NORMAL
 
-    # ── State accessors ───────────────────────────────────────────────────────
-
-    def get_level(self) -> HaltLevel:
-        if self._kill:
-            return HaltLevel.FULL_HALT
-        with self._conn() as c:
-            row = c.execute("SELECT level FROM circuit_breaker WHERE id=1").fetchone()
-            return HaltLevel(row["level"]) if row else HaltLevel.NONE
-
-    def is_halted(self) -> bool:
-        return self.get_level() != HaltLevel.NONE
+    def exits_allowed(self) -> bool:
+        """Always true — we must be able to exit positions even when halted."""
+        return True
 
     def trading_allowed(self) -> bool:
-        return not self.is_halted()
+        return self.new_entries_allowed()
+
+    def is_halted(self) -> bool:
+        return self._level != HaltLevel.NORMAL
 
     def full_halt_active(self) -> bool:
-        return self.get_level() == HaltLevel.FULL_HALT
+        return self._level in (HaltLevel.HARD_HALT, HaltLevel.KILLED)
 
-    # ── Trigger / reset ───────────────────────────────────────────────────────
+    def halt_reason(self) -> str:
+        return self._halt_reason
 
-    def trigger(self, level: HaltLevel, reason: str) -> None:
-        # Alert cooldown: don't spam Slack/email if the same event fired recently
-        now = datetime.now(ET)
-        if hasattr(self, "_last_alert_at") and self._last_alert_at:
-            if (now - self._last_alert_at).total_seconds() < 300:  # 5-min cooldown
-                log.info("CircuitBreaker {} skipped (alert cooldown — {:.0f}s since last)",
-                         level, (now - self._last_alert_at).total_seconds())
-                # Still persist the state change even if we skip the alert
-                with self._conn() as c:
-                    c.execute(
-                        "UPDATE circuit_breaker SET level=?, reason=?, triggered_at=?, reset_at=NULL WHERE id=1",
-                        (level, reason, now.isoformat()),
+    def status_string(self) -> str:
+        level_names = {
+            HaltLevel.NORMAL: "NORMAL",
+            HaltLevel.SOFT_HALT: "SOFT_HALT",
+            HaltLevel.HARD_HALT: "HARD_HALT",
+            HaltLevel.KILLED: "KILLED",
+        }
+        s = level_names[self._level]
+        if self._halt_reason:
+            s += f" ({self._halt_reason})"
+        return s
+
+    # ── Check methods — call these from the main loop ──────────────────────────
+
+    def check_equity(self, current_equity: float) -> HaltLevel:
+        """
+        Main check — call with current portfolio value.
+        Updates high-water mark and checks all thresholds.
+        Returns the current halt level.
+        """
+        cfg = self._cfg
+
+        if current_equity > self._high_water_mark:
+            self._high_water_mark = current_equity
+
+        # Kill switch (most severe — check first)
+        if cfg.kill_switch_enabled and not cfg.kill_switch_override:
+            if current_equity < cfg.kill_switch_floor:
+                self._escalate(
+                    HaltLevel.KILLED,
+                    f"equity ${current_equity:.2f} < floor ${cfg.kill_switch_floor:.2f}. "
+                    f"Recovery: set kill_switch_override: true in config/risk.yaml",
+                )
+                return self._level
+
+        # Drawdown from high-water mark
+        if self._high_water_mark > 0:
+            drawdown = (self._high_water_mark - current_equity) / self._high_water_mark
+            if drawdown >= cfg.hard_halt_pct:
+                self._escalate(
+                    HaltLevel.HARD_HALT,
+                    f"drawdown {drawdown:.1%} >= hard_halt {cfg.hard_halt_pct:.1%} "
+                    f"(hwm=${self._high_water_mark:.2f}). "
+                    f"Recovery: auto-resets at next daily open",
+                )
+            elif drawdown >= cfg.soft_halt_pct:
+                if self._level == HaltLevel.NORMAL:
+                    self._escalate(
+                        HaltLevel.SOFT_HALT,
+                        f"drawdown {drawdown:.1%} >= soft_halt {cfg.soft_halt_pct:.1%} "
+                        f"(hwm=${self._high_water_mark:.2f}). New entries paused.",
                     )
-                return
-        self._last_alert_at = now
+            elif self._level == HaltLevel.SOFT_HALT:
+                # Drawdown recovered below soft threshold
+                logger.info(
+                    "CircuitBreaker: drawdown recovered to %.1f%% — resuming NORMAL", drawdown * 100
+                )
+                self._level = HaltLevel.NORMAL
+                self._halt_reason = ""
 
-        with self._conn() as c:
-            c.execute(
-                "UPDATE circuit_breaker SET level=?, reason=?, triggered_at=?, reset_at=NULL WHERE id=1",
-                (level, reason, now.isoformat()),
+        return self._level
+
+    def check_daily_loss(self, daily_pnl: float, equity: float) -> HaltLevel:
+        """Check if today's loss (realized + unrealized) exceeds the daily limit."""
+        if equity <= 0 or daily_pnl >= 0:
+            return self._level
+
+        cfg = self._cfg
+        loss_pct = abs(daily_pnl) / equity
+        if loss_pct >= cfg.daily_loss_limit_pct:
+            self._escalate(
+                HaltLevel.HARD_HALT,
+                f"daily loss {loss_pct:.1%} >= limit {cfg.daily_loss_limit_pct:.1%} "
+                f"(P&L=${daily_pnl:+.2f}). Recovery: auto-resets tomorrow",
             )
-        log.warning("CircuitBreaker TRIGGERED: {} — {}", level, reason)
-        alert_circuit_break(reason, level)
+        return self._level
 
-    def reset(self) -> None:
-        now = datetime.now(ET).isoformat()
-        with self._conn() as c:
-            c.execute(
-                "UPDATE circuit_breaker SET level=?, reason='reset', reset_at=? WHERE id=1",
-                (HaltLevel.NONE, now),
-            )
-        log.info("CircuitBreaker RESET at {}", now)
-
-    # ── Auto-trigger checks ───────────────────────────────────────────────────
-
-    def check_daily_loss(
-        self,
-        daily_pnl: float,
-        portfolio_value: float,
-    ) -> None:
-        if portfolio_value <= 0:
-            return
-        loss_pct = -daily_pnl / portfolio_value
-        if loss_pct >= config.DAILY_LOSS_LIMIT_PCT:
-            # FULL_HALT — not just trade halt.  Stopping new entries while
-            # existing losing positions remain open means the bad day keeps
-            # getting worse.  Close everything and go to cash.
-            self.trigger(
-                HaltLevel.FULL_HALT,
-                f"Daily loss {loss_pct:.2%} ≥ limit {config.DAILY_LOSS_LIMIT_PCT:.2%} — closing all positions",
-            )
-
-    def check_weekly_loss(
-        self,
-        weekly_pnl: float,
-        portfolio_value: float,
-    ) -> None:
-        if portfolio_value <= 0:
-            return
-        loss_pct = -weekly_pnl / portfolio_value
-        if loss_pct >= config.WEEKLY_LOSS_LIMIT_PCT:
-            self.trigger(
-                HaltLevel.FULL_HALT,
-                f"Weekly loss {loss_pct:.2%} ≥ limit {config.WEEKLY_LOSS_LIMIT_PCT:.2%}",
-            )
-
-    # ── Drawdown tracker: halt on rapid consecutive losses ─────────────────
-    # Track recent losing trades to detect momentum crush.
     def record_loss(self) -> None:
-        """Call this after each closing trade that was a loss."""
-        now = datetime.now(ET)
-        self._loss_timestamps.append(now)
-        # Prune entries older than 1 hour
-        self._loss_timestamps = [
-            t for t in self._loss_timestamps
-            if (now - t).total_seconds() < 3600
-        ]
+        self._consecutive_losses += 1
 
-    def check_drawdown_streak(self, min_losses: int = 3, window_hours: float = 1.0) -> None:
-        """Halt if too many losing trades happened within a short window (momentum crush)."""
-        if not hasattr(self, "_loss_timestamps"):
-            return
-        now = datetime.now(ET)
-        recent = [
-            t for t in self._loss_timestamps
-            if (now - t).total_seconds() < window_hours * 3600
-        ]
-        if len(recent) >= min_losses:
-            self.trigger(
-                HaltLevel.TRADE_HALT,
-                f"Drawdown streak: {len(recent)} losses in {window_hours:.0f}h (momentum crush)",
+    def record_win(self) -> None:
+        self._consecutive_losses = 0
+
+    def check_consecutive_losses(self, max_losses: int = 3) -> bool:
+        """Trigger SOFT_HALT if consecutive losses exceed threshold."""
+        if self._consecutive_losses >= max_losses:
+            self._escalate(
+                HaltLevel.SOFT_HALT,
+                f"{self._consecutive_losses} consecutive losses — pausing new entries. "
+                f"Recovery: auto-resets at next daily open",
             )
+            return True
+        return False
 
+    def reset_daily(self) -> None:
+        """
+        Called at daily open (4 AM ET by default).
+        SOFT_HALT and HARD_HALT reset. KILLED does NOT reset (requires human action).
+        """
+        if self._level in (HaltLevel.SOFT_HALT, HaltLevel.HARD_HALT):
+            logger.info("CircuitBreaker: daily reset — resuming from %s", self._level.name)
+            self._level = HaltLevel.NORMAL
+            self._halt_reason = ""
+        self._consecutive_losses = 0
 
-def _env_kill() -> bool:
-    import os
-    return os.environ.get("KILL_SWITCH", "0") == "1"
+    def set_high_water_mark(self, equity: float) -> None:
+        """Initialize high-water mark from DB on startup."""
+        if equity > self._high_water_mark:
+            self._high_water_mark = equity
+
+    def _escalate(self, level: HaltLevel, reason: str) -> None:
+        if level.value <= self._level.value:
+            return
+        prev = self._level.name
+        self._level = level
+        self._halt_reason = reason
+        logger.warning("CircuitBreaker: %s → %s — %s", prev, level.name, reason)
