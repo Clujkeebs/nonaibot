@@ -59,7 +59,7 @@ class BacktestResult:
     start_date: str
     end_date: str
     starting_capital: float
-    ending_capital: float
+    ending_capital: float = 0.0
     trades: List[Trade] = field(default_factory=list)
 
     @property

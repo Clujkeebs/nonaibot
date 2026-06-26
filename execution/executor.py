@@ -31,7 +31,6 @@ import pytz
 from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
-import config as _cfg_module  # legacy import kept for compatibility
 from core.broker import BrokerClient
 from core.config import BotConfig
 from core.state import SQLiteState

@@ -115,13 +115,12 @@ class PositionSizer:
         if notional > buying_power * 0.98:
             qty = (buying_power * 0.98) / signal.price
 
-        # Round: crypto keeps fractional precision, equity uses whole shares
-        # (fractional equity is allowed via notional orders for fractionable assets,
-        #  but sizer returns qty; executor decides notional vs qty order type)
-        if signal.is_crypto:
-            qty = round(qty, 6)
-        else:
-            qty = round(qty, 4)  # executor will handle whole vs fractional
+        # Floor (never round up) to the asset's precision so we can never breach the
+        # position-size or buying-power caps computed above. Crypto keeps 6 decimals;
+        # equity keeps 4 (executor decides notional vs whole-share order type).
+        precision = 6 if signal.is_crypto else 4
+        scale = 10 ** precision
+        qty = math.floor(qty * scale) / scale
 
         notional = qty * signal.price
 

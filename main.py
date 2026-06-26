@@ -90,11 +90,11 @@ class Bot:
             sys.exit(1)
 
         self._broker = BrokerClient(self._cfg)
-        self._clock = MarketClock(self._broker)
+        self._clock = MarketClock(config=self._cfg, broker=self._broker)
         self._state = SQLiteState(self._cfg.db_path)
         self._fetcher = DataFetcher(self._broker, self._cfg)
         self._assets = AssetCache(self._broker)
-        self._regime = RegimeFilter()
+        self._regime = RegimeFilter(self._cfg)
         self._strategies = {
             "trend": TrendStrategy(),
             "mean_reversion": MeanReversionStrategy(),
@@ -102,8 +102,18 @@ class Bot:
         }
         self._sizer = PositionSizer(self._cfg)
         self._circuit = CircuitBreaker(self._cfg)
-        self._executor = Executor(self._broker, self._state, self._assets, self._cfg)
-        self._screener = Screener(self._fetcher, self._assets, self._cfg)
+        self._executor = Executor(
+            broker=self._broker,
+            assets=self._assets,
+            state=self._state,
+            config=self._cfg,
+        )
+        self._screener = Screener(
+            fetcher=self._fetcher,
+            assets=self._assets,
+            state=self._state,
+            config=self._cfg,
+        )
         self._audit = AuditReport(self._cfg, self._state)
 
         # Timestamps for interval tracking
@@ -433,7 +443,8 @@ class Bot:
     # ── Daily audit ───────────────────────────────────────────────────────────
 
     def _run_audit(self, account: Optional[Dict], open_positions: Dict) -> None:
-        if self._audit_done_today:
+        # DB-backed guard so a restart after delivery doesn't resend the report
+        if self._audit_done_today or self._state.get_audit_ran_today():
             return
         logger.info("Generating daily audit report...")
         try:
@@ -446,6 +457,7 @@ class Bot:
             text = self._audit.format_text(report_data)
             self._audit.write_to_file(text)
             send_report(text, self._cfg)
+            self._state.mark_audit_ran()
             self._audit_done_today = True
         except Exception as e:
             logger.warning("Audit error: %s", e)
@@ -541,12 +553,10 @@ class Bot:
         # Equity snapshot (for PnL tracking)
         self._state.save_equity_snapshot(equity)
 
-        # ── Pre-market window (7–9:30 AM ET): regime + screener + audit ───────
-        is_premarket = (
-            now_et.weekday() < 5
-            and 7 <= now_et.hour < 9
-            or (now_et.hour == 9 and now_et.minute < 30)
-        )
+        # ── Pre-market window (7–9:30 AM ET, weekdays): regime + screener + audit ─
+        is_weekday = now_et.weekday() < 5
+        in_premarket_window = (7 <= now_et.hour < 9) or (now_et.hour == 9 and now_et.minute < 30)
+        is_premarket = is_weekday and in_premarket_window
         if is_premarket:
             if now - self._last_regime_update >= REGIME_UPDATE_INTERVAL:
                 self._update_regime()
