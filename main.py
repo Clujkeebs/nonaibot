@@ -123,6 +123,7 @@ class Bot:
         self._audit_done_today: bool = False
         self._screener_done_today: bool = False
         self._last_daily_reset_date: Optional[str] = None
+        self._last_tier: Optional[str] = None
 
         # Running flag for graceful shutdown
         self._running = True
@@ -548,6 +549,15 @@ class Bot:
         self._state.save_equity_snapshot(equity)
         self._circuit.check_equity(equity)
 
+        # Select the capital tier for the current account size before trading
+        tier = self._cfg.apply_capital_tier(equity)
+        self._last_tier = tier
+        logger.info(
+            "Capital tier: %s — max_pos=%.0f%% concurrent=%d risk/trade=%.2f%%",
+            tier, self._cfg.max_position_pct * 100,
+            self._cfg.max_concurrent_positions, self._cfg.risk_per_trade_pct * 100,
+        )
+
         logger.info("Bot started. equity=%.2f  paper=%s", equity, self._cfg.paper)
         send_alert(
             f"Bot started. equity=${equity:.2f} mode={'PAPER' if self._cfg.paper else 'LIVE'}",
@@ -595,6 +605,24 @@ class Bot:
 
         equity = float(account["equity"])
         buying_power = float(account["buying_power"])
+
+        # Scale sizing/diversification to current account size (capital tier)
+        tier = self._cfg.apply_capital_tier(equity)
+        if tier != self._last_tier:
+            logger.info(
+                "CAPITAL TIER → %s (equity=$%.2f): max_pos=%.0f%% concurrent=%d "
+                "risk/trade=%.2f%% edge(eq/cr)=%.2f%%/%.2f%%",
+                tier, equity, self._cfg.max_position_pct * 100,
+                self._cfg.max_concurrent_positions, self._cfg.risk_per_trade_pct * 100,
+                self._cfg.edge_equity_min_pct * 100, self._cfg.edge_crypto_min_pct * 100,
+            )
+            if self._last_tier is not None:
+                send_alert(
+                    f"Capital tier changed: {self._last_tier} → {tier} "
+                    f"(equity ${equity:.2f}). Sizing adjusted.",
+                    self._cfg, level="INFO",
+                )
+            self._last_tier = tier
 
         # Circuit breaker check
         self._circuit.check_equity(equity)
@@ -678,6 +706,9 @@ class Bot:
             "risk_status": self._circuit.level.name,
             "risk_reason": self._circuit.halt_reason(),
             "paper_mode": self._cfg.paper,
+            "capital_tier": self._cfg.active_tier_name,
+            "max_position_pct": self._cfg.max_position_pct,
+            "max_concurrent_positions": self._cfg.max_concurrent_positions,
             "last_equity_scan": datetime.fromtimestamp(self._last_equity_scan, tz=ET).isoformat()
             if self._last_equity_scan > 0 else None,
             "last_crypto_scan": datetime.fromtimestamp(self._last_crypto_scan, tz=ET).isoformat()

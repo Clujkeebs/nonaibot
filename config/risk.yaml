@@ -14,6 +14,67 @@ sizing:
   min_notional: 1.00             # $1 absolute minimum per order (Alpaca rule)
   confluence_bonus_pct: 0.25     # +25% size when 2+ signals agree on same symbol
 
+# ── Capital tiers ───────────────────────────────────────────────────────────────
+# The bot adapts how it sizes and diversifies to how much money is in the account.
+# A $100 account CONCENTRATES into a few meaningful positions — per-trade costs
+# (crypto fees, spread) would eat tiny $5 positions alive, so we hold fewer, larger
+# ones and demand a bigger edge before entering. A $100k account SPREADS across many
+# names with a small cap on each, accepts a thinner edge (costs are a smaller % at
+# size), and watches a wider universe.
+#
+# Selection: tiers are checked top-to-bottom; the FIRST tier whose `up_to` is >=
+# current equity wins. The final tier (up_to: null) is the catch-all. Any key a tier
+# omits falls back to the flat `sizing` / `edge_gate` defaults above. Applied every
+# loop tick against live equity, so the bot retiers itself automatically as it grows.
+capital_tiers:
+  - name: micro                  # ~$100 challenge: concentrate to beat costs
+    up_to: 1000
+    max_concurrent_positions: 3
+    max_position_pct: 0.35
+    portfolio_heat_max: 0.90
+    risk_per_trade_pct: 0.02
+    max_crypto_allocation_pct: 0.50
+    max_dynamic_slots: 2
+    max_dynamic_crypto_slots: 1
+    edge_equity_min_pct: 0.006
+    edge_crypto_min_pct: 0.012
+
+  - name: small                  # $1k–$10k
+    up_to: 10000
+    max_concurrent_positions: 6
+    max_position_pct: 0.20
+    portfolio_heat_max: 0.80
+    risk_per_trade_pct: 0.015
+    max_crypto_allocation_pct: 0.40
+    max_dynamic_slots: 4
+    max_dynamic_crypto_slots: 2
+    edge_equity_min_pct: 0.004
+    edge_crypto_min_pct: 0.009
+
+  - name: mid                    # $10k–$100k
+    up_to: 100000
+    max_concurrent_positions: 10
+    max_position_pct: 0.12
+    portfolio_heat_max: 0.70
+    risk_per_trade_pct: 0.01
+    max_crypto_allocation_pct: 0.30
+    max_dynamic_slots: 6
+    max_dynamic_crypto_slots: 3
+    edge_equity_min_pct: 0.003
+    edge_crypto_min_pct: 0.007
+
+  - name: large                  # > $100k: diversify, smaller per-name, thinner edge OK
+    up_to: null
+    max_concurrent_positions: 15
+    max_position_pct: 0.08
+    portfolio_heat_max: 0.60
+    risk_per_trade_pct: 0.0075
+    max_crypto_allocation_pct: 0.25
+    max_dynamic_slots: 10
+    max_dynamic_crypto_slots: 4
+    edge_equity_min_pct: 0.0025
+    edge_crypto_min_pct: 0.006
+
 # ── Stop-loss & take-profit ────────────────────────────────────────────────────
 # Enforced in SOFTWARE — fractional positions cannot use resting stop orders.
 # ATR-based stops self-adjust to current volatility.

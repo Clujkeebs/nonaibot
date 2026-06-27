@@ -22,6 +22,30 @@ Deploys to Railway as an always-on worker process with SQLite state persistence.
 
 A **regime filter** (SPY vs 50/200 MA + ADX) weights strategies appropriately for current market conditions.
 
+## Account-Size Awareness (Capital Tiers)
+
+The bot scales how it sizes and diversifies to how much money is in the account —
+a $100 account should not trade like a $100k one. Each loop tick it re-reads live
+equity and selects a **capital tier** that overrides the sizing parameters:
+
+| Tier | Equity | Max/position | Concurrent | Risk/trade | Edge gate (eq/crypto) | Watchlist slots |
+|------|--------|--------------|------------|------------|------------------------|-----------------|
+| micro | ≤ $1k | 35% | 3 | 2.0% | 0.60% / 1.20% | 2 + 1 |
+| small | ≤ $10k | 20% | 6 | 1.5% | 0.40% / 0.90% | 4 + 2 |
+| mid | ≤ $100k | 12% | 10 | 1.0% | 0.30% / 0.70% | 6 + 3 |
+| large | > $100k | 8% | 15 | 0.75% | 0.25% / 0.60% | 10 + 4 |
+
+The logic: a small account **concentrates** into a few meaningful positions and
+demands a wider edge — tiny $5 positions get eaten alive by per-trade costs. A
+large account **spreads** across many names with a small cap on each and can accept
+a thinner edge, since costs are a smaller percentage at size. The bot retiers itself
+automatically as it grows or draws down, logs every tier change, and reports the
+active tier in `/status` and the daily audit.
+
+Tiers are fully config-driven in `config/risk.yaml` (`capital_tiers:`) and hot-reload
+like everything else. An explicit `RISK_PER_TRADE_PCT` env var pins risk-per-trade
+and is never overridden by a tier; a hard 5% ceiling caps it regardless.
+
 ## Manual Trades Are Auto-Adopted
 
 If you place a trade by hand in Alpaca — say you buy $10 of a new stock — the bot

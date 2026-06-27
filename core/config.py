@@ -217,6 +217,13 @@ class BotConfig:
         self.min_notional: float = siz.get("min_notional", 1.00)
         self.confluence_bonus_pct: float = siz.get("confluence_bonus_pct", 0.25)
 
+        # Capital tiers — sizing/diversification that scales with account equity.
+        # Applied each tick via apply_capital_tier(). An explicit RISK_PER_TRADE_PCT
+        # env var pins risk-per-trade and is never overridden by a tier.
+        self.capital_tiers: List[dict] = risk.get("capital_tiers", [])
+        self._risk_env_pinned: bool = "RISK_PER_TRADE_PCT" in os.environ
+        self.active_tier_name: str = "base"
+
         stops = risk.get("stops", {})
         self.atr_period: int = stops.get("atr_period", 14)
         self.atr_stop_mult: float = stops.get("atr_stop_mult", 2.0)
@@ -249,6 +256,59 @@ class BotConfig:
     def reload(self) -> None:
         """Re-read all YAML files. Called at the top of each main loop iteration."""
         self._load()
+
+    # Tier keys → (config attribute, cast). Only these are overlaid from a tier.
+    _TIER_KEYS = {
+        "max_concurrent_positions": ("max_concurrent_positions", int),
+        "max_position_pct": ("max_position_pct", float),
+        "portfolio_heat_max": ("portfolio_heat_max", float),
+        "risk_per_trade_pct": ("risk_per_trade_pct", float),
+        "max_crypto_allocation_pct": ("max_crypto_allocation_pct", float),
+        "max_dynamic_slots": ("max_dynamic_slots", int),
+        "max_dynamic_crypto_slots": ("max_dynamic_crypto_slots", int),
+        "edge_equity_min_pct": ("edge_equity_min_pct", float),
+        "edge_crypto_min_pct": ("edge_crypto_min_pct", float),
+    }
+
+    def apply_capital_tier(self, equity: float) -> str:
+        """
+        Scale sizing/diversification parameters to the current account size.
+
+        Call this each tick AFTER reload() (which restores the flat YAML defaults)
+        so the tier overlay always sits on fresh base values. Tiers are checked in
+        order; the first whose `up_to` is >= equity wins, with the final (up_to:
+        null) tier as the catch-all. Keys a tier omits keep their flat defaults.
+
+        Returns the active tier name (e.g. "micro", "large", or "base" if no tiers
+        are configured).
+        """
+        if not self.capital_tiers or equity <= 0:
+            self.active_tier_name = "base"
+            return self.active_tier_name
+
+        tier = None
+        for t in self.capital_tiers:
+            up_to = t.get("up_to")
+            if up_to is None or equity <= float(up_to):
+                tier = t
+                break
+        if tier is None:
+            tier = self.capital_tiers[-1]
+
+        for key, (attr, cast) in self._TIER_KEYS.items():
+            if key not in tier or tier[key] is None:
+                continue
+            # An explicit RISK_PER_TRADE_PCT env var always wins over the tier.
+            if attr == "risk_per_trade_pct" and self._risk_env_pinned:
+                continue
+            setattr(self, attr, cast(tier[key]))
+
+        # Hard safety ceiling — never let a tier push risk-per-trade above 5%.
+        if self.risk_per_trade_pct > 0.05:
+            self.risk_per_trade_pct = 0.05
+
+        self.active_tier_name = tier.get("name", "unknown")
+        return self.active_tier_name
 
     @property
     def all_equities(self) -> List[str]:

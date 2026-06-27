@@ -83,6 +83,9 @@ class AuditReport:
                 "equity": equity,
                 "buying_power": buying_power,
                 "open_positions_count": len(open_positions) if open_positions else 0,
+                "capital_tier": self._cfg.active_tier_name,
+                "max_position_pct": self._cfg.max_position_pct,
+                "max_concurrent_positions": self._cfg.max_concurrent_positions,
             },
             "pnl": {
                 "daily_realized": daily_realized,
@@ -140,6 +143,12 @@ class AuditReport:
         lines.append(f"  Equity:          ${acc['equity']:>10.2f}")
         lines.append(f"  Buying Power:    ${acc['buying_power']:>10.2f}")
         lines.append(f"  Open Positions:  {acc['open_positions_count']}")
+        if "capital_tier" in acc:
+            lines.append(
+                f"  Capital Tier:    {acc['capital_tier']} "
+                f"(max {acc.get('max_position_pct', 0)*100:.0f}%/pos, "
+                f"{acc.get('max_concurrent_positions', 0)} concurrent)"
+            )
 
         # PnL
         pnl = report["pnl"]
