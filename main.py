@@ -124,6 +124,8 @@ class Bot:
         self._screener_done_today: bool = False
         self._last_daily_reset_date: Optional[str] = None
         self._last_tier: Optional[str] = None
+        self._auth_ok: bool = False
+        self._auth_warned: bool = False
 
         # Running flag for graceful shutdown
         self._running = True
@@ -146,16 +148,52 @@ class Bot:
             len(self._cfg.dynamic_crypto),
         )
 
+    @staticmethod
+    def _is_auth_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return (
+            "40110000" in msg
+            or "not authorized" in msg
+            or "unauthorized" in msg
+            or "forbidden" in msg
+            or "invalid" in msg and "key" in msg
+        )
+
+    def _auth_help(self) -> str:
+        mode = "live" if not self._cfg.paper else "paper"
+        endpoint = "https://app.alpaca.markets" if not self._cfg.paper else "https://app.alpaca.markets/paper/dashboard/overview"
+        return (
+            f"Alpaca auth REJECTED the trading endpoint. The bot is in '{mode.upper()}' "
+            f"mode (TRADING_MODE={'live' if not self._cfg.paper else 'paper'}), which requires "
+            f"{mode.upper()} API keys. Paper and live keys are NOT interchangeable. "
+            f"Generate {mode} keys at {endpoint} and set APCA_API_KEY_ID / APCA_API_SECRET_KEY. "
+            f"(Market data may still work with either key type, which is why crypto bars load "
+            f"but account/positions fail.)"
+        )
+
     def _get_account(self) -> Optional[Dict]:
         try:
             acct = self._broker.get_account()
+            self._auth_ok = True
+            self._auth_warned = False
             return {
                 "equity": float(acct.equity),
                 "buying_power": float(acct.buying_power),
                 "cash": float(acct.cash),
             }
         except Exception as e:
-            logger.warning("Could not fetch account: %s", e)
+            self._auth_ok = False
+            if self._is_auth_error(e):
+                # Log the actionable message once, then stay quiet to avoid spam
+                if not self._auth_warned:
+                    logger.error("=" * 70)
+                    logger.error("ALPACA AUTHENTICATION FAILED")
+                    logger.error(self._auth_help())
+                    logger.error("=" * 70)
+                    send_alert(self._auth_help(), self._cfg, level="ERROR")
+                    self._auth_warned = True
+            else:
+                logger.warning("Could not fetch account: %s", e)
             return None
 
     def _get_open_positions(self) -> Dict:
@@ -172,7 +210,8 @@ class Bot:
                 }
             return result
         except Exception as e:
-            logger.warning("Could not fetch positions: %s", e)
+            if not (self._is_auth_error(e) and self._auth_warned):
+                logger.warning("Could not fetch positions: %s", e)
             return {}
 
     # ── Position reconciliation (adopt manual trades) ──────────────────────────
@@ -600,7 +639,11 @@ class Bot:
         # Fetch live account state
         account = self._get_account()
         if account is None:
-            logger.warning("Tick skipped — could not fetch account")
+            # _get_account already logged the cause (auth help, once, or a warning).
+            # Keep the status server alive so /health and /status report the problem.
+            self._update_server_status(None, {})
+            if not self._auth_warned:
+                logger.warning("Tick skipped — could not fetch account")
             return
 
         equity = float(account["equity"])
@@ -706,6 +749,7 @@ class Bot:
             "risk_status": self._circuit.level.name,
             "risk_reason": self._circuit.halt_reason(),
             "paper_mode": self._cfg.paper,
+            "alpaca_auth": "ok" if self._auth_ok else "FAILED — check API keys match TRADING_MODE",
             "capital_tier": self._cfg.active_tier_name,
             "max_position_pct": self._cfg.max_position_pct,
             "max_concurrent_positions": self._cfg.max_concurrent_positions,
