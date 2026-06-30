@@ -76,9 +76,10 @@ class BotConfig:
         )
 
         # ── Trading mode ─────────────────────────────────────────────────────
-        # TRADING_MODE=paper (default) or live
-        raw_mode = _env("TRADING_MODE", "paper").lower()
-        self.paper: bool = raw_mode != "live"
+        # TRADING_MODE=live (default) or paper. This bot runs a funded LIVE
+        # account, so live is the default; set TRADING_MODE=paper to dry-run.
+        raw_mode = _env("TRADING_MODE", "live").lower()
+        self.paper: bool = raw_mode == "paper"
 
         # Override base URLs for paper vs live
         if self.paper:

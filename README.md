@@ -91,7 +91,7 @@ python main.py
 | `APCA_API_KEY_ID` | yes | — | Alpaca API key |
 | `APCA_API_SECRET_KEY` | yes | — | Alpaca secret key |
 | `APCA_API_BASE_URL` | yes | paper URL | Alpaca base URL |
-| `TRADING_MODE` | no | `paper` | `paper` or `live` |
+| `TRADING_MODE` | no | `live` | `live` (real money) or `paper` (dry-run) |
 | `DB_PATH` | no | `bot.db` | SQLite file path (use `/data/bot.db` on Railway) |
 | `PORT` | no | `8080` | HTTP health server port |
 | `SLACK_WEBHOOK_URL` | no | — | Slack webhook for alerts/reports |
@@ -166,16 +166,14 @@ main.py           Run loop — orchestrates all components
 
 1. Push to GitHub
 2. Connect repo to Railway
-3. Add environment variables (Alpaca keys, `TRADING_MODE=paper` to start)
+3. Add environment variables: **live** Alpaca keys + `TRADING_MODE=live`
 4. Add a Railway Volume mounted at `/data`, set `DB_PATH=/data/bot.db`
 5. Railway uses `Procfile` to start: `python main.py`
 6. Health checks hit `GET /health` on port 8080
 
-Switch to live trading only after validating with paper mode:
-```
-TRADING_MODE=live
-APCA_API_BASE_URL=https://api.alpaca.markets
-```
+This runs a **funded live account** (real money). The kill switch ($85 floor) and
+drawdown halts (5% soft / 10% hard) are the safety rails. To dry-run instead, set
+`TRADING_MODE=paper` and use paper keys.
 
 ## Constraints (Alpaca, June 2026)
 
