@@ -1,8 +1,9 @@
 [build]
-builder = "NIXPACKS"
-# --prefer-binary: use prebuilt wheels for numpy/pandas (no slow source compile)
-# --retries/--timeout: survive transient PyPI network blips during the build
-buildCommand = "pip install --prefer-binary --retries 8 --timeout 180 -r requirements.txt"
+# Build from the Dockerfile (python:3.11-slim) instead of nixpacks. nixpacks was
+# failing while fetching nix packages from cache.nixos.org; Docker Hub + PyPI are
+# more reliable on Railway and the build compiles nothing.
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python main.py"
