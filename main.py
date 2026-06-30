@@ -582,6 +582,28 @@ class Bot:
         self._load_state()
         server.start_server(port=int(os.environ.get("PORT", "8080")))
 
+        # Auto-detect whether the supplied keys are live or paper, and pin that
+        # mode. This makes the operator's keys "just work" regardless of how
+        # TRADING_MODE was set, and surfaces bad keys with a clear diagnostic.
+        detected = self._broker.validate_credentials()
+        if detected:
+            self._auth_ok = True
+            logger.info("Credentials validated — running in %s mode", detected.upper())
+            _banner(self._cfg)  # re-print with the resolved mode
+        else:
+            self._auth_ok = False
+            self._auth_warned = True  # already logged the masked diagnostic
+            logger.error(
+                "Starting in DEGRADED mode — no trading until valid keys are set. "
+                "Monitoring /health and /status only."
+            )
+            send_alert(
+                "Alpaca auth failed on BOTH live and paper. Bot is up but NOT trading. "
+                "Check APCA_API_KEY_ID / APCA_API_SECRET_KEY in Railway (typos, quotes, "
+                "or key/secret swapped).",
+                self._cfg, level="ERROR",
+            )
+
         # Warm-up: fetch initial account state
         account = self._get_account()
         equity = float(account["equity"]) if account else 0.0

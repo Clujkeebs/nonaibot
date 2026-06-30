@@ -10,6 +10,8 @@ All other modules import from here rather than instantiating SDK clients directl
 """
 from __future__ import annotations
 
+import logging
+import os
 import threading
 import time
 from typing import Any, Optional
@@ -18,6 +20,8 @@ from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDa
 from alpaca.trading.client import TradingClient
 
 from core.config import BotConfig
+
+logger = logging.getLogger(__name__)
 
 # ── Rate limiter (token bucket) ───────────────────────────────────────────────
 # Free tier: 200 data requests/min. Trading API has separate (generous) limits.
@@ -82,6 +86,61 @@ class BrokerClient:
         self._trading: Optional[TradingClient] = None
         self._stock_data: Optional[StockHistoricalDataClient] = None
         self._crypto_data: Optional[CryptoHistoricalDataClient] = None
+
+    # ── Credential / mode auto-detection ───────────────────────────────────────
+
+    def validate_credentials(self) -> Optional[str]:
+        """
+        Figure out whether the provided keys are LIVE or PAPER by actually calling
+        the trading endpoint on both, and pin the bot to whichever authenticates.
+
+        This removes the entire class of "paper key against live endpoint" (and
+        vice-versa) failures — the operator just supplies their keys and the bot
+        adapts. Live is tried first so real keys go live.
+
+        Returns "live", "paper", or None (neither authenticated → bad keys).
+        On success it pins cfg.paper, rebuilds the trading client, and writes the
+        resolved mode back to TRADING_MODE so config.reload() stays consistent.
+        """
+        if not self._cfg.api_key or not self._cfg.secret_key:
+            logger.error("No Alpaca API key/secret found in environment")
+            return None
+
+        for paper in (False, True):
+            label = "paper" if paper else "live"
+            try:
+                client = TradingClient(
+                    api_key=self._cfg.api_key,
+                    secret_key=self._cfg.secret_key,
+                    paper=paper,
+                )
+                acct = client.get_account()  # the real auth test
+                # Success — pin this mode everywhere
+                self._cfg.paper = paper
+                self._trading = client
+                os.environ["TRADING_MODE"] = label  # survive config.reload()
+                logger.info(
+                    "Alpaca auth OK in %s mode (account %s, status=%s)",
+                    label.upper(), getattr(acct, "account_number", "?"),
+                    getattr(acct, "status", "?"),
+                )
+                return label
+            except Exception as e:
+                logger.warning("Alpaca auth failed in %s mode: %s", label, str(e)[:200])
+                continue
+
+        # Neither worked — emit a masked diagnostic to spot typos/whitespace
+        k = self._cfg.api_key
+        s = self._cfg.secret_key
+        masked = f"{k[:4]}…{k[-2:]}" if len(k) >= 6 else "(too short)"
+        logger.error("=" * 70)
+        logger.error("ALPACA AUTH FAILED ON BOTH LIVE AND PAPER ENDPOINTS")
+        logger.error("  key id : %s  (length %d)", masked, len(k))
+        logger.error("  secret : length %d", len(s))
+        logger.error("  Likely: keys mistyped, key/secret swapped, or wrong account.")
+        logger.error("  Alpaca keys: id starts 'PK' (paper) or 'AK' (live); secret is ~40 chars.")
+        logger.error("=" * 70)
+        return None
 
     # ── Lazily-constructed clients ─────────────────────────────────────────────
 

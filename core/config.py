@@ -35,6 +35,20 @@ def _env(key: str, default: Any = None) -> Optional[str]:
     return os.environ.get(key, default)
 
 
+def _clean_cred(v: Optional[str]) -> str:
+    """
+    Sanitize a credential pasted into an env var. Strips whitespace/newlines and
+    surrounding quotes — the classic dashboard gotcha where APCA_API_KEY_ID gets
+    saved as  "PK123..."  or with a trailing space and silently fails auth.
+    """
+    if not v:
+        return ""
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("\"", "'"):
+        v = v[1:-1].strip()
+    return v
+
+
 def _bool_env(key: str, default: bool) -> bool:
     v = os.environ.get(key)
     if v is None:
@@ -68,11 +82,13 @@ class BotConfig:
         risk = _read_yaml("risk.yaml")
 
         # ── Alpaca credentials (REQUIRED env vars) ──────────────────────────
-        self.api_key: str = (
-            _env("APCA_API_KEY_ID") or _env("ALPACA_API_KEY") or ""
+        self.api_key: str = _clean_cred(
+            _env("APCA_API_KEY_ID") or _env("ALPACA_API_KEY")
+            or _env("APCA_API_KEY") or _env("ALPACA_API_KEY_ID")
         )
-        self.secret_key: str = (
-            _env("APCA_API_SECRET_KEY") or _env("ALPACA_SECRET_KEY") or ""
+        self.secret_key: str = _clean_cred(
+            _env("APCA_API_SECRET_KEY") or _env("ALPACA_SECRET_KEY")
+            or _env("ALPACA_API_SECRET") or _env("APCA_API_SECRET")
         )
 
         # ── Trading mode ─────────────────────────────────────────────────────
