@@ -607,7 +607,8 @@ class Bot:
         # Warm-up: fetch initial account state
         account = self._get_account()
         equity = float(account["equity"]) if account else 0.0
-        self._state.save_equity_snapshot(equity)
+        bp = float(account["buying_power"]) if account else 0.0
+        self._state.save_equity_snapshot(equity, bp, 0, 0.0)
         self._circuit.check_equity(equity)
 
         # Select the capital tier for the current account size before trading
@@ -709,7 +710,12 @@ class Bot:
         self._maybe_daily_reset()
 
         # Equity snapshot (for PnL tracking)
-        self._state.save_equity_snapshot(equity)
+        daily_unrealized = sum(
+            float(p.get("unrealized_pl", 0)) for p in open_positions.values()
+        )
+        self._state.save_equity_snapshot(
+            equity, buying_power, len(open_positions), daily_unrealized
+        )
 
         # ── Pre-market window (7–9:30 AM ET, weekdays): regime + screener + audit ─
         is_weekday = now_et.weekday() < 5

@@ -192,7 +192,11 @@ class SQLiteState:
     # ── Equity curve ───────────────────────────────────────────────────────────
 
     def save_equity_snapshot(
-        self, equity: float, buying_power: float, open_positions: int, daily_pnl: float
+        self,
+        equity: float,
+        buying_power: float = 0.0,
+        open_positions: int = 0,
+        daily_pnl: float = 0.0,
     ) -> None:
         now = self._now_iso()
         today = self._today()
