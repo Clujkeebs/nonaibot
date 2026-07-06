@@ -362,24 +362,43 @@ class Bot:
                         sym, pnl_pct * 100, tp_pct * 100,
                     )
 
-            # Time stop
-            if not exit_reason:
-                age_rec = position_ages.get(sym)
-                if age_rec:
-                    entry_dt = age_rec["opened"]
-                    if entry_dt.tzinfo is None:
-                        entry_dt = ET.localize(entry_dt)
-                    max_days = 5 if is_crypto else 10
-                    held = (now_et - entry_dt).days
-                    if held >= max_days:
-                        exit_reason = "time_stop"
-                        logger.info("EXIT %s time_stop: held %d days", sym, held)
+            # Time stops (config-driven). Two rules:
+            #   early_time_stop: cut a loser that's down > early_time_stop_loss
+            #     after early_time_stop_days — don't let dead money bleed.
+            #   time_stop: after time_stop_days, exit ONLY if the position hasn't
+            #     earned its keep (pnl < time_stop_min_pnl) — never cut a working
+            #     winner just because it's old.
+            age_rec = position_ages.get(sym)
+            if not exit_reason and age_rec:
+                entry_dt = age_rec["opened"]
+                if entry_dt.tzinfo is None:
+                    entry_dt = ET.localize(entry_dt)
+                held = (now_et - entry_dt).days
+                if (
+                    held >= self._cfg.early_time_stop_days
+                    and pnl_pct <= -self._cfg.early_time_stop_loss
+                ):
+                    exit_reason = "early_time_stop"
+                    logger.info(
+                        "EXIT %s early_time_stop: held %dd pnl=%.2f%%", sym, held, pnl_pct * 100
+                    )
+                elif held >= self._cfg.time_stop_days and pnl_pct < self._cfg.time_stop_min_pnl:
+                    exit_reason = "time_stop"
+                    logger.info(
+                        "EXIT %s time_stop: held %dd pnl=%.2f%% (stagnant)", sym, held, pnl_pct * 100
+                    )
 
-            # Strategy exit
+            # Strategy exit — ask the strategy that actually opened the position.
+            # Adopted/manual positions have no strategy; fall back to the asset-
+            # appropriate default.
             if not exit_reason:
-                strat_key = "crypto_momentum" if is_crypto else (
-                    "trend" if pnl_pct >= 0 else "mean_reversion"
-                )
+                recorded = (age_rec or {}).get("strategy", "")
+                if recorded in self._strategies:
+                    strat_key = recorded
+                elif is_crypto:
+                    strat_key = "crypto_momentum"
+                else:
+                    strat_key = "trend" if pnl_pct >= 0 else "mean_reversion"
                 strat = self._strategies.get(strat_key)
                 if strat and strat.check_exit(sym, avg_price, df, self._cfg):
                     exit_reason = f"strategy_{strat_key}"
@@ -406,8 +425,12 @@ class Bot:
             reason=reason,
         )
         if ok:
+            # Fully retire the position's tracking rows. Leaving the age record
+            # behind would make a future re-entry inherit this trade's time-stop
+            # clock (and adoption would skip it as "already tracked").
             self._position_highs.pop(sym, None)
-            self._state.save_position_high(sym, 0.0)
+            self._state.clear_position_high(sym)
+            self._state.clear_position_age(sym)
             cooldown_hours = self._cfg.cooldown_crypto_hours if is_crypto else self._cfg.cooldown_equity_hours
             cd_until = datetime.now(ET) + timedelta(hours=cooldown_hours)
             self._state.save_cooldown(sym, cd_until, reason=reason)
@@ -502,6 +525,15 @@ class Bot:
                     self._position_highs[sym] = sig.price
                     self._state.save_position_high(sym, sig.price)
                     self._state.save_position_age(sym, now_et, strategy=strat_name)
+                    # Count the new position immediately so later signals in this
+                    # same scan respect max_concurrent / crypto cap / heat.
+                    open_positions[sym] = {
+                        "qty": qty,
+                        "market_value": qty * sig.price,
+                        "avg_price": sig.price,
+                        "unrealized_pl": 0.0,
+                        "unrealized_plpc": 0.0,
+                    }
                     send_alert(
                         f"BUY {sym} qty={qty:.4f} @ ${sig.price:.4f} "
                         f"strategy={strat_name} reason={sig.reason or ''}",

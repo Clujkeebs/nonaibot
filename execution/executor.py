@@ -282,17 +282,17 @@ class Executor:
     ):
         is_fractionable = self._assets.is_fractionable(symbol)
 
-        # SELL: always whole-share market order
+        # SELL: fractionable → exact fractional qty (never strand a partial share);
+        # non-fractionable → whole shares only
         if side == OrderSide.SELL:
             import math
-            sell_qty = math.floor(abs(qty))
+            if is_fractionable:
+                sell_qty = round(abs(qty), 4)
+            else:
+                sell_qty = math.floor(abs(qty))
             if sell_qty <= 0:
-                # Try fractional sell if symbol is fractionable
-                if is_fractionable:
-                    sell_qty = round(abs(qty), 4)
-                else:
-                    logger.warning("Cannot sell <1 share of non-fractionable %s qty=%.4f", symbol, qty)
-                    return None
+                logger.warning("Cannot sell qty=%.6f of %s (fractionable=%s)", qty, symbol, is_fractionable)
+                return None
             return MarketOrderRequest(
                 symbol=symbol,
                 qty=sell_qty,
@@ -392,13 +392,18 @@ class Executor:
                         time_in_force=TimeInForce.GTC, client_order_id=client_oid,
                     )
             else:
-                # Equity retry: just use market order (should always fill)
+                # Equity retry: market order (should always fill). Keep fractional
+                # precision for fractionable symbols — flooring a 0.2-share position
+                # to 0 would strand it.
                 import math
-                whole_qty = math.floor(qty)
-                if whole_qty <= 0:
+                if self._assets.is_fractionable(symbol):
+                    retry_qty = round(qty, 4)
+                else:
+                    retry_qty = math.floor(qty)
+                if retry_qty <= 0:
                     return None
                 return MarketOrderRequest(
-                    symbol=symbol, qty=whole_qty, side=side,
+                    symbol=symbol, qty=retry_qty, side=side,
                     time_in_force=TimeInForce.DAY, client_order_id=client_oid,
                 )
         except Exception as e:
